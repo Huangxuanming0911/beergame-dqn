@@ -1,0 +1,18 @@
+{
+  "random_background": {
+    "mean_reward": 831.9500122070312,
+    "std_reward": 104.3564682006836,
+    "episodes": 20,
+    "seed": 42,
+    "background_policy": "random",
+    "model_path": "models\\background\\dueling_double_dqn_random_background_seed_42_firm_1_tplus1.pt"
+  },
+  "base_stock_background": {
+    "mean_reward": 824.0,
+    "std_reward": 73.38460540771484,
+    "episodes": 20,
+    "seed": 42,
+    "background_policy": "base_stock",
+    "model_path": "models\\background\\dueling_double_dqn_base_stock_background_seed_42_firm_1_tplus1.pt"
+  }
+}

@@ -25,3 +25,9 @@ models/baselines/*_seed_*_firm_1_tplus1.pt
 !models/baselines/*_seed_42_firm_1_tplus1.pt
 results/baselines/*_seed_*_training_scores.npy
 !results/baselines/*_seed_42_training_scores.npy
+
+# 背景策略实验同样只保留展示用 seed=42 模型。
+models/background/*_seed_*_firm_1_tplus1.pt
+!models/background/*_seed_42_firm_1_tplus1.pt
+models/multiagent/*_seed_*_tplus1.pt
+!models/multiagent/*_seed_42_tplus1.pt

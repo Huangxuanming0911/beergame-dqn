@@ -42,5 +42,20 @@
     "log_every": 50,
     "plot_window": 50,
     "seed": 42
+  },
+  "background_experiment": {
+    "seed": 42,
+    "model_dir": "models/background",
+    "output_dir": "results/background",
+    "figure_dir": "figures/background"
+  },
+  "multiagent": {
+    "episodes": 600,
+    "seed": 42,
+    "eval_every": 50,
+    "eval_episodes": 20,
+    "model_dir": "models/multiagent",
+    "output_dir": "results/multiagent",
+    "figure_dir": "figures/multiagent"
   }
 }

@@ -7,7 +7,7 @@ from .env import BeerGameConfig
 
 
 def load_config(path: str | Path) -> dict:
-    with Path(path).open("r", encoding="utf-8") as f:
+    with Path(path).open("r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -24,4 +24,3 @@ def make_env_config(raw: dict) -> BeerGameConfig:
         max_order=int(env.get("max_order", 20)),
         seed=env.get("seed", 42),
     )
-

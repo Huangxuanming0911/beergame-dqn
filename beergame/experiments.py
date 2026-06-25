@@ -36,13 +36,38 @@ def setup_chinese_font():
 setup_chinese_font()
 
 
-def make_background_actions(env: BeerGameEnv, state: np.ndarray, firm_id: int, rng: np.random.Generator):
-    # 未被控制的企业视为环境的一部分，这里使用随机订货。
-    actions = rng.integers(0, env.config.max_order + 1, size=env.num_firms).astype(np.float32)
+def make_background_actions(
+    env: BeerGameEnv,
+    state: np.ndarray,
+    firm_id: int,
+    rng: np.random.Generator,
+    background_policy: str = "random",
+    target_inventory: int | None = None,
+):
+    if background_policy == "random":
+        # 未被控制的企业视为环境的一部分，默认沿用随机订货背景。
+        actions = rng.integers(0, env.config.max_order + 1, size=env.num_firms).astype(np.float32)
+    elif background_policy == "base_stock":
+        # 其他企业按库存补足规则订货，使需求能沿链路更自然地传导。
+        target = env.config.initial_inventory if target_inventory is None else target_inventory
+        actions = np.zeros(env.num_firms, dtype=np.float32)
+        for i in range(env.num_firms):
+            inventory = float(state[i, 2])
+            actions[i] = np.clip(round(target - inventory), 0, env.config.max_order)
+    else:
+        raise ValueError(f"未知背景策略: {background_policy}")
     return actions
 
 
-def evaluate_policy(env: BeerGameEnv, policy, firm_id: int, episodes: int, seed: int | None = 123):
+def evaluate_policy(
+    env: BeerGameEnv,
+    policy,
+    firm_id: int,
+    episodes: int,
+    seed: int | None = 123,
+    background_policy: str = "random",
+    background_target_inventory: int | None = None,
+):
     rng = np.random.default_rng(seed)
     scores = []
     histories = {"orders": [], "inventory": [], "demand": [], "satisfied": [], "rewards": []}
@@ -52,7 +77,14 @@ def evaluate_policy(env: BeerGameEnv, policy, firm_id: int, episodes: int, seed:
         score = 0.0
         ep = {key: [] for key in histories}
         while not done:
-            actions = make_background_actions(env, state, firm_id, rng)
+            actions = make_background_actions(
+                env,
+                state,
+                firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target_inventory,
+            )
             # 只把目标企业的随机动作替换为待评估策略的动作。
             actions[firm_id] = policy.act(state, firm_id)
             next_state, rewards, done, info = env.step(actions)
@@ -71,6 +103,8 @@ def evaluate_policy(env: BeerGameEnv, policy, firm_id: int, episodes: int, seed:
 
 def train_dqn(env: BeerGameEnv, agent: DQNAgent, cfg: dict):
     rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
     scores = []
     eps = float(cfg.get("eps_start", 1.0))
     eps_end = float(cfg.get("eps_end", 0.01))
@@ -82,9 +116,16 @@ def train_dqn(env: BeerGameEnv, agent: DQNAgent, cfg: dict):
         done = False
         score = 0.0
         while not done:
-            actions = make_background_actions(env, state, agent.firm_id, rng)
+            actions = make_background_actions(
+                env,
+                state,
+                agent.firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target,
+            )
             firm_state = state[agent.firm_id]
-            # DQN只控制一个企业，其余企业保持随机行为作为背景环境。
+            # DQN只控制一个企业，其余企业由背景策略决定。
             action = agent.act(firm_state, eps)
             actions[agent.firm_id] = action
             next_state, rewards, done, _ = env.step(actions)
@@ -141,6 +182,12 @@ DISPLAY_NAMES = {
     "double_dqn": "Double DQN",
     "dueling_dqn": "Dueling DQN",
     "dueling_double_dqn": "Dueling Double DQN",
+    "random_background": "随机背景",
+    "base_stock_background": "库存补足背景",
+    "random_all": "全随机",
+    "base_stock_all": "全库存补足",
+    "single_agent_ddqn": "单智能体 DDQN",
+    "multiagent_ddqn": "多智能体 DDQN",
 }
 
 COLORS = {
@@ -150,6 +197,12 @@ COLORS = {
     "double_dqn": "#59a14f",
     "dueling_dqn": "#f28e2b",
     "dueling_double_dqn": "#e15759",
+    "random_background": "#4e79a7",
+    "base_stock_background": "#e15759",
+    "random_all": "#9aa0a6",
+    "base_stock_all": "#6f7782",
+    "single_agent_ddqn": "#4e79a7",
+    "multiagent_ddqn": "#e15759",
 }
 
 
@@ -272,6 +325,192 @@ def plot_baseline_comparison(results: dict, output_path: str | Path):
     _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN系列局部放大")
     fig.suptitle("Baseline 与算法消融评估结果（误差线为标准差）", fontsize=15, y=0.98)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.savefig(output_path, dpi=220)
+    plt.close()
+
+
+def plot_background_policy_comparison(results: dict, output_path: str | Path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    method_names = ["random_background", "base_stock_background"]
+    labels = [DISPLAY_NAMES[name] for name in method_names]
+    score_arrays = [np.asarray(results[name]["scores"], dtype=np.float32) for name in method_names]
+    means = np.array([float(np.mean(scores)) for scores in score_arrays])
+    stds = np.array([float(np.std(scores)) for scores in score_arrays])
+    colors = [COLORS[name] for name in method_names]
+
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(12, 5.8),
+        gridspec_kw={"width_ratios": [1.35, 0.85]},
+    )
+
+    ax = axes[0]
+    box = ax.boxplot(
+        score_arrays,
+        patch_artist=True,
+        widths=0.48,
+        showmeans=True,
+        meanprops={"marker": "D", "markerfacecolor": "#222222", "markeredgecolor": "#222222", "markersize": 5},
+        medianprops={"color": "#222222", "linewidth": 1.4},
+    )
+    for patch, color in zip(box["boxes"], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.28)
+        patch.set_edgecolor(color)
+    for idx, scores in enumerate(score_arrays, start=1):
+        jitter = np.linspace(-0.12, 0.12, len(scores))
+        ax.scatter(
+            np.full(len(scores), idx) + jitter,
+            scores,
+            s=22,
+            color=colors[idx - 1],
+            alpha=0.72,
+            edgecolors="white",
+            linewidths=0.35,
+        )
+    ax.set_xticks([1, 2])
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("单次评估 episode reward")
+    ax.set_title("20 个评估 episode 分布")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    for idx, (mean, std) in enumerate(zip(means, stds), start=1):
+        ax.errorbar(
+            idx,
+            mean,
+            yerr=std,
+            fmt="o",
+            color="#222222",
+            capsize=5,
+            markersize=4,
+            linewidth=1.2,
+        )
+        ax.text(
+            idx + 0.17,
+            mean,
+            f"均值 {mean:.1f}\nstd {std:.1f}",
+            va="center",
+            ha="left",
+            fontsize=9,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.5},
+        )
+
+    ax = axes[1]
+    ax.axis("off")
+    mean_delta = means[1] - means[0]
+    std_delta = stds[1] - stds[0]
+    std_reduction = (1 - stds[1] / stds[0]) * 100 if stds[0] != 0 else 0.0
+    text = (
+        "关键指标\n\n"
+        f"随机背景均值：{means[0]:.2f}\n"
+        f"库存补足背景均值：{means[1]:.2f}\n"
+        f"均值差：{mean_delta:+.2f}\n\n"
+        f"随机背景标准差：{stds[0]:.2f}\n"
+        f"库存补足背景标准差：{stds[1]:.2f}\n"
+        f"波动变化：{std_delta:+.2f}\n"
+        f"波动下降：{std_reduction:.1f}%\n\n"
+        "解读：均值接近，\n"
+        "库存补足背景更稳定。"
+    )
+    ax.text(
+        0.02,
+        0.96,
+        text,
+        va="top",
+        ha="left",
+        fontsize=11,
+        linespacing=1.55,
+        bbox={"facecolor": "#f7f7f7", "edgecolor": "#d0d0d0", "boxstyle": "round,pad=0.55"},
+    )
+
+    fig.suptitle("其他企业随机背景 vs 库存补足背景", fontsize=15, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
+    fig.savefig(output_path, dpi=220)
+    plt.close()
+
+
+def plot_multiagent_training(scores: np.ndarray, output_path: str | Path, window: int = 50):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    scores = np.asarray(scores, dtype=np.float32)
+    total_scores = scores.sum(axis=1)
+    curves = [scores[:, i] for i in range(scores.shape[1])] + [total_scores]
+    labels = [f"企业{i}" for i in range(scores.shape[1])] + ["全链路合计"]
+    colors = ["#4e79a7", "#59a14f", "#f28e2b", "#e15759"]
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    for curve, label, color in zip(curves, labels, colors):
+        moving = np.array([np.mean(curve[max(0, i - window + 1): i + 1]) for i in range(len(curve))])
+        ax.plot(moving, label=f"{label} {window}轮滑动平均", color=color, linewidth=1.8)
+    ax.axhline(0, color="#333333", linewidth=1)
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("episode reward")
+    ax.set_title("多智能体训练奖励曲线")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend(ncol=2)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=220)
+    plt.close()
+
+
+def plot_multiagent_eval_curve(eval_points: np.ndarray, eval_scores: np.ndarray, output_path: str | Path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    eval_points = np.asarray(eval_points, dtype=np.int32)
+    eval_scores = np.asarray(eval_scores, dtype=np.float32)
+    total_scores = eval_scores.sum(axis=1)
+    curves = [eval_scores[:, i] for i in range(eval_scores.shape[1])] + [total_scores]
+    labels = [f"企业{i}" for i in range(eval_scores.shape[1])] + ["全链路合计"]
+    colors = ["#4e79a7", "#59a14f", "#f28e2b", "#e15759"]
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    for curve, label, color in zip(curves, labels, colors):
+        ax.plot(eval_points, curve, marker="o", label=label, color=color, linewidth=1.9)
+    ax.axhline(0, color="#333333", linewidth=1)
+    ax.set_xlabel("训练轮次")
+    ax.set_ylabel("无探索评估 reward")
+    ax.set_title("多智能体无探索评估曲线")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend(ncol=2)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=220)
+    plt.close()
+
+
+def plot_multiagent_comparison(summary: dict, output_path: str | Path):
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    method_names = ["random_all", "base_stock_all", "single_agent_ddqn", "multiagent_ddqn"]
+    labels = [DISPLAY_NAMES[name] for name in method_names]
+    colors = [COLORS[name] for name in method_names]
+    firm1_means = np.array([summary[name]["firm_1_mean_reward"] for name in method_names], dtype=np.float32)
+    firm1_stds = np.array([summary[name]["firm_1_std_reward"] for name in method_names], dtype=np.float32)
+    total_means = np.array([summary[name]["total_chain_mean_reward"] for name in method_names], dtype=np.float32)
+    total_stds = np.array([summary[name]["total_chain_std_reward"] for name in method_names], dtype=np.float32)
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5.6), gridspec_kw={"width_ratios": [1, 1]})
+
+    for ax, means, stds, title in [
+        (axes[0], firm1_means, firm1_stds, "目标企业1 reward 对比"),
+        (axes[1], total_means, total_stds, "全链路 total reward 对比"),
+    ]:
+        x = np.arange(len(method_names))
+        bars = ax.bar(x, means, yerr=stds, capsize=4, color=colors, alpha=0.92, width=0.62)
+        ax.axhline(0, color="#333333", linewidth=1)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=18, ha="right")
+        ax.set_ylabel("平均评估奖励")
+        ax.set_title(title)
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
+        y_min = float(np.min(means - stds))
+        y_max = float(np.max(means + stds))
+        span = max(y_max - y_min, 1.0)
+        ax.set_ylim(y_min - 0.12 * span, y_max + 0.20 * span)
+        _annotate_bars(ax, bars, means)
+
+    fig.suptitle("单智能体与多智能体策略对比", fontsize=15, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.94])
     fig.savefig(output_path, dpi=220)
     plt.close()
 

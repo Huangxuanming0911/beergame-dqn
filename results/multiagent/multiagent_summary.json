@@ -1,0 +1,51 @@
+{
+  "random_all": {
+    "total_chain_mean_reward": -3830.0,
+    "total_chain_std_reward": 1818.255615234375,
+    "episodes": 20,
+    "firm_0_mean_reward": -3763.375,
+    "firm_0_std_reward": 2392.921142578125,
+    "firm_1_mean_reward": -4023.72509765625,
+    "firm_1_std_reward": 2047.66552734375,
+    "firm_2_mean_reward": 3957.10009765625,
+    "firm_2_std_reward": 1936.2789306640625
+  },
+  "base_stock_all": {
+    "total_chain_mean_reward": -3617.199951171875,
+    "total_chain_std_reward": 349.86627197265625,
+    "episodes": 20,
+    "firm_0_mean_reward": -3509.925048828125,
+    "firm_0_std_reward": 74.12174224853516,
+    "firm_1_mean_reward": -3521.324951171875,
+    "firm_1_std_reward": 116.45507049560547,
+    "firm_2_mean_reward": 3414.050048828125,
+    "firm_2_std_reward": 248.91091918945312
+  },
+  "single_agent_ddqn": {
+    "total_chain_mean_reward": -4663.72509765625,
+    "total_chain_std_reward": 2122.970947265625,
+    "episodes": 20,
+    "firm_0_mean_reward": -3057.175048828125,
+    "firm_0_std_reward": 1450.3994140625,
+    "firm_1_mean_reward": 831.9500122070312,
+    "firm_1_std_reward": 104.3564682006836,
+    "firm_2_mean_reward": -2438.5,
+    "firm_2_std_reward": 2145.511962890625
+  },
+  "multiagent_ddqn": {
+    "total_chain_mean_reward": 3426.550048828125,
+    "total_chain_std_reward": 207.98382568359375,
+    "episodes": 20,
+    "firm_0_mean_reward": 468.7749938964844,
+    "firm_0_std_reward": 76.88245391845703,
+    "firm_1_mean_reward": 538.5999755859375,
+    "firm_1_std_reward": 50.69654846191406,
+    "firm_2_mean_reward": 2419.175048828125,
+    "firm_2_std_reward": 145.15184020996094,
+    "model_paths": [
+      "models\\multiagent\\dueling_double_dqn_firm_0_seed_42_tplus1.pt",
+      "models\\multiagent\\dueling_double_dqn_firm_1_seed_42_tplus1.pt",
+      "models\\multiagent\\dueling_double_dqn_firm_2_seed_42_tplus1.pt"
+    ]
+  }
+}
