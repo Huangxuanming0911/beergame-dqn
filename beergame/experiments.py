@@ -104,10 +104,27 @@ def train_dqn(env: BeerGameEnv, agent: DQNAgent, cfg: dict):
 def plot_training(scores: np.ndarray, output_path: str | Path, window: int = 50):
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    moving = np.array([np.mean(scores[max(0, i - window + 1): i + 1]) for i in range(len(scores))])
-    plt.figure(figsize=(9, 5))
-    plt.plot(scores, alpha=0.35, label="单轮奖励")
-    plt.plot(moving, label=f"{window}轮滑动平均")
+    scores = np.asarray(scores, dtype=np.float32)
+
+    if scores.ndim == 1:
+        moving = np.array([np.mean(scores[max(0, i - window + 1): i + 1]) for i in range(len(scores))])
+        plt.figure(figsize=(9, 5))
+        plt.plot(scores, alpha=0.35, label="单轮奖励")
+        plt.plot(moving, label=f"{window}轮滑动平均")
+    else:
+        moving = np.array(
+            [
+                [np.mean(row[max(0, i - window + 1): i + 1]) for i in range(scores.shape[1])]
+                for row in scores
+            ]
+        )
+        mean_curve = moving.mean(axis=0)
+        std_curve = moving.std(axis=0)
+        x = np.arange(scores.shape[1])
+        plt.figure(figsize=(9, 5))
+        plt.plot(mean_curve, label=f"{window}轮滑动平均（多seed均值）")
+        plt.fill_between(x, mean_curve - std_curve, mean_curve + std_curve, alpha=0.2, label="seed间标准差")
+
     plt.xlabel("训练轮次")
     plt.ylabel("奖励")
     plt.title("DQN训练奖励曲线")

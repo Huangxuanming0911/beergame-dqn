@@ -13,3 +13,15 @@ Thumbs.db
 # 原始脚本生成的旧模型，不作为当前算法消融实验的关键结果上传。
 models/dqn_agent_firm_1_episode_*.pth
 models/dqn_agent_firm_1_final.pth
+
+# 单seed旧模型，当前实验统一使用带 seed 的模型文件。
+models/baselines/dqn_firm_1_tplus1.pt
+models/baselines/double_dqn_firm_1_tplus1.pt
+models/baselines/dueling_dqn_firm_1_tplus1.pt
+models/baselines/dueling_double_dqn_firm_1_tplus1.pt
+
+# 只上传 README 中展示用的 seed=42 模型和汇总结果。
+models/baselines/*_seed_*_firm_1_tplus1.pt
+!models/baselines/*_seed_42_firm_1_tplus1.pt
+results/baselines/*_seed_*_training_scores.npy
+!results/baselines/*_seed_42_training_scores.npy

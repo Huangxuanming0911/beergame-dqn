@@ -13,9 +13,9 @@ from .experiments import (
     evaluate_policy,
     plot_baseline_comparison,
     plot_training,
-    run_rule_baselines,
     train_dqn,
 )
+from .policies import build_policy
 
 
 class DQNPolicy:
@@ -26,7 +26,7 @@ class DQNPolicy:
         return self.agent.act(state[firm_id], epsilon=0.0)
 
 
-def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int) -> DQNAgent:
+def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed: int) -> DQNAgent:
     return DQNAgent(
         state_size=3,
         action_size=env.config.max_order + 1,
@@ -40,8 +40,34 @@ def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int) -> D
         update_every=int(cfg["dqn"].get("update_every", 4)),
         network_type=algorithm.get("network_type", "standard"),
         double_dqn=bool(algorithm.get("double_dqn", False)),
-        seed=cfg["env"].get("seed", 42),
+        seed=seed,
     )
+
+
+def evaluate_over_seeds(env: BeerGameEnv, policy, firm_id: int, eval_episodes: int, seeds: list[int]):
+    seed_scores = []
+    for seed in seeds:
+        result = evaluate_policy(env, policy, firm_id, eval_episodes, seed=seed)
+        seed_scores.append(result["scores"])
+    return {"scores": np.concatenate(seed_scores), "seed_scores": seed_scores}
+
+
+def evaluate_rule_policy_over_seeds(
+    env: BeerGameEnv,
+    policy_name: str,
+    firm_id: int,
+    eval_episodes: int,
+    seeds: list[int],
+    target_inventory: int,
+):
+    seed_scores = []
+    seed_means = []
+    for seed in seeds:
+        policy = build_policy(policy_name, env.config.max_order, seed=seed, target_inventory=target_inventory)
+        result = evaluate_policy(env, policy, firm_id, eval_episodes, seed=seed)
+        seed_scores.append(result["scores"])
+        seed_means.append(float(np.mean(result["scores"])))
+    return {"scores": np.concatenate(seed_scores), "seed_mean_rewards": seed_means}
 
 
 def main():
@@ -60,42 +86,81 @@ def main():
     figure_dir.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    results = run_rule_baselines(env, cfg)
     algorithms = cfg.get(
         "algorithms",
         [{"name": "dqn", "network_type": "standard", "double_dqn": False}],
     )
+    train_seeds = [int(seed) for seed in cfg["experiment"].get("train_seeds", [int(cfg["env"].get("seed", 42))])]
+    eval_episodes = int(cfg["experiment"].get("eval_episodes", 20))
+
+    # 规则策略不需要训练，但也在同一组seed上评估，便于和学习算法公平比较。
+    results = {}
+    target = int(cfg["baselines"].get("base_stock_target", env.config.initial_inventory))
+    for policy_name in ["random", "base_stock"]:
+        results[policy_name] = evaluate_rule_policy_over_seeds(
+            env,
+            policy_name,
+            firm_id,
+            eval_episodes,
+            train_seeds,
+            target,
+        )
 
     for algorithm in algorithms:
         name = algorithm["name"]
         print(f"\n=== {name} ===")
-        agent = build_agent(env, cfg, algorithm, firm_id)
-        model_path = model_dir / f"{name}_firm_{firm_id}_tplus1.pt"
-        if args.skip_train and model_path.exists():
-            agent.load(model_path)
-        else:
-            scores = train_dqn(env, agent, cfg["dqn"])
-            agent.save(model_path)
-            np.save(output_dir / f"{name}_training_scores.npy", scores)
-            plot_training(
-                scores,
-                figure_dir / f"{name}_training_rewards.png",
-                window=int(cfg["dqn"].get("plot_window", 50)),
-            )
+        all_training_scores = []
+        all_eval_scores = []
+        seed_eval_means = []
 
-        results[name] = evaluate_policy(
-            env,
-            DQNPolicy(agent),
-            firm_id,
-            int(cfg["experiment"].get("eval_episodes", 20)),
-            seed=cfg["env"].get("seed", 42),
+        for seed in train_seeds:
+            print(f"--- seed={seed} ---")
+            agent = build_agent(env, cfg, algorithm, firm_id, seed)
+            model_path = model_dir / f"{name}_seed_{seed}_firm_{firm_id}_tplus1.pt"
+            train_cfg = {**cfg["dqn"], "seed": seed}
+            if args.skip_train and model_path.exists():
+                agent.load(model_path)
+            else:
+                scores = train_dqn(env, agent, train_cfg)
+                agent.save(model_path)
+                np.save(output_dir / f"{name}_seed_{seed}_training_scores.npy", scores)
+            if (output_dir / f"{name}_seed_{seed}_training_scores.npy").exists():
+                all_training_scores.append(np.load(output_dir / f"{name}_seed_{seed}_training_scores.npy"))
+
+            eval_result = evaluate_policy(
+                env,
+                DQNPolicy(agent),
+                firm_id,
+                eval_episodes,
+                seed=seed,
+            )
+            all_eval_scores.append(eval_result["scores"])
+            seed_eval_means.append(float(np.mean(eval_result["scores"])))
+
+        stacked_training_scores = np.vstack(all_training_scores)
+        np.save(output_dir / f"{name}_training_scores.npy", stacked_training_scores)
+        plot_training(
+            stacked_training_scores,
+            figure_dir / f"{name}_training_rewards.png",
+            window=int(cfg["dqn"].get("plot_window", 50)),
         )
+        results[name] = {
+            "scores": np.concatenate(all_eval_scores),
+            "seed_mean_rewards": seed_eval_means,
+        }
 
     summary = {
         name: {
             "mean_reward": float(np.mean(result["scores"])),
             "std_reward": float(np.std(result["scores"])),
             "episodes": int(len(result["scores"])),
+            "train_seeds": train_seeds,
+            "eval_episodes_per_seed": eval_episodes,
+            **(
+                {"seed_mean_rewards": result["seed_mean_rewards"]}
+                if "seed_mean_rewards" in result
+                else {}
+            ),
         }
         for name, result in results.items()
     }

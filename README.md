@@ -62,6 +62,14 @@ DQN 系列算法消融：
 
 四个学习算法使用相同训练配置，包括训练轮数、隐藏层规模、学习率、batch size、随机种子和评估 episode 数，便于公平比较。
 
+默认配置使用展示用随机种子：
+
+```json
+"train_seeds": [42]
+```
+
+每个学习算法会在该 seed 下独立训练一次，并用 20 个 episode 评估。若需要更严格的统计结果，可以把 `train_seeds` 改成多个 seed 后重新运行。
+
 ## 代码结构
 
 ```text
@@ -97,30 +105,39 @@ python -m beergame.run_baselines --config configs/default.json --skip-train
 
 ## 当前实验结果
 
-当前配置下，每种方法评估 20 个 episode，结果如下：
+当前配置下，每个算法训练 300 个 episode、评估 20 个 episode。展示用 seed=42 的结果如下：
 
-| 方法 | 平均 reward | 标准差 |
-| --- | ---: | ---: |
-| `random` | -3964.20 | 2280.98 |
-| `base_stock` | -3787.88 | 816.81 |
-| `dqn` | 758.08 | 90.27 |
-| `double_dqn` | 819.15 | 83.34 |
-| `dueling_dqn` | 763.00 | 100.82 |
-| `dueling_double_dqn` | 831.95 | 104.36 |
+| 方法 | 平均 reward | 标准差 | seed均值 |
+| --- | ---: | ---: | --- |
+| `random` | -2659.18 | 1980.17 | -2659.18 |
+| `base_stock` | -3979.18 | 833.86 | -3979.18 |
+| `dqn` | 758.08 | 90.27 | 758.08 |
+| `double_dqn` | 819.15 | 83.34 | 819.15 |
+| `dueling_dqn` | 763.00 | 100.82 | 763.00 |
+| `dueling_double_dqn` | 831.95 | 104.36 | 831.95 |
 
-在当前实验中，`dueling_double_dqn` 的平均 reward 最高，`double_dqn` 也相比普通 DQN 有明显提升。
+在该展示 seed 下，`dueling_double_dqn` 的平均 reward 最高，能够直观看到 Double DQN 与 Dueling 结构组合后的提升。
+
+完整结果保存在：
+
+```text
+results/baselines/baseline_summary.json
+```
+
+`baseline_summary.json` 中的 `seed_mean_rewards` 字段记录每个 seed 下的平均评估 reward。
 
 ## 输出文件
 
 模型：
 
 ```text
-models/baselines/{algorithm}_firm_1_tplus1.pt
+models/baselines/{algorithm}_seed_{seed}_firm_1_tplus1.pt
 ```
 
 训练奖励：
 
 ```text
+results/baselines/{algorithm}_seed_{seed}_training_scores.npy
 results/baselines/{algorithm}_training_scores.npy
 figures/baselines/{algorithm}_training_rewards.png
 ```
