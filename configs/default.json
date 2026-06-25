@@ -1,0 +1,45 @@
+{
+  "env": {
+    "num_firms": 3,
+    "prices": [10, 9, 8],
+    "holding_cost": 0.5,
+    "lost_sales_cost": 2.0,
+    "initial_inventory": 100,
+    "poisson_lambda": 10,
+    "max_steps": 100,
+    "max_order": 20,
+    "seed": 42
+  },
+  "experiment": {
+    "firm_id": 1,
+    "eval_episodes": 20,
+    "output_dir": "results/baselines",
+    "figure_dir": "figures/baselines",
+    "model_dir": "models/baselines"
+  },
+  "baselines": {
+    "base_stock_target": 100
+  },
+  "algorithms": [
+    {"name": "dqn", "network_type": "standard", "double_dqn": false},
+    {"name": "double_dqn", "network_type": "standard", "double_dqn": true},
+    {"name": "dueling_dqn", "network_type": "dueling", "double_dqn": false},
+    {"name": "dueling_double_dqn", "network_type": "dueling", "double_dqn": true}
+  ],
+  "dqn": {
+    "episodes": 300,
+    "hidden_size": 64,
+    "buffer_size": 10000,
+    "batch_size": 64,
+    "gamma": 0.99,
+    "learning_rate": 0.001,
+    "tau": 0.001,
+    "update_every": 4,
+    "eps_start": 1.0,
+    "eps_end": 0.05,
+    "eps_decay": 0.99,
+    "log_every": 50,
+    "plot_window": 50,
+    "seed": 42
+  }
+}

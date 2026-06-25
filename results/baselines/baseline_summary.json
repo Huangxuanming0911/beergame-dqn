@@ -1,0 +1,32 @@
+{
+  "random": {
+    "mean_reward": -3964.199951171875,
+    "std_reward": 2280.9833984375,
+    "episodes": 20
+  },
+  "base_stock": {
+    "mean_reward": -3787.875,
+    "std_reward": 816.8135375976562,
+    "episodes": 20
+  },
+  "dqn": {
+    "mean_reward": 782.6500244140625,
+    "std_reward": 92.59117889404297,
+    "episodes": 20
+  },
+  "double_dqn": {
+    "mean_reward": 819.625,
+    "std_reward": 108.18132019042969,
+    "episodes": 20
+  },
+  "dueling_dqn": {
+    "mean_reward": 842.625,
+    "std_reward": 90.24091339111328,
+    "episodes": 20
+  },
+  "dueling_double_dqn": {
+    "mean_reward": 761.25,
+    "std_reward": 107.37300872802734,
+    "episodes": 20
+  }
+}

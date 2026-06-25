@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.venv/
+venv/
+.env
+
+.DS_Store
+Thumbs.db
+
+# 原始脚本生成的旧模型，不作为当前算法消融实验的关键结果上传。
+models/dqn_agent_firm_1_episode_*.pth
+models/dqn_agent_firm_1_final.pth
