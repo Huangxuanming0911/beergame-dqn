@@ -16,21 +16,40 @@ from .policies import build_policy
 
 
 def setup_chinese_font():
-    """为Matplotlib注册中文字体，避免保存图片时中文显示为方块。"""
+    """为Matplotlib注册中文字体，避免保存图片时中文显示为方块。
+
+    优先尝试系统常见中文字体，找不到则使用 Matplotlib 默认无衬线字体
+    并关闭 unicode_minus 以正常显示负号。
+    """
 
     candidates = [
+        # Windows
         Path("C:/Windows/Fonts/NotoSansSC-VF.ttf"),
         Path("C:/Windows/Fonts/msyh.ttc"),
         Path("C:/Windows/Fonts/simhei.ttf"),
         Path("C:/Windows/Fonts/simsun.ttc"),
+        # Linux 常见中文字体（AR PL UMing 同时覆盖中文与拉丁字符，优先使用）
+        Path("/usr/share/fonts/truetype/arphic/uming.ttc"),
+        Path("/usr/share/fonts/truetype/arphic-gbsn00lp/gbsn00lp.ttf"),
+        Path("/usr/share/fonts/truetype/arphic-gkai00mp/gkai00mp.ttf"),
+        Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"),
+        Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+        Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
     ]
     for font_path in candidates:
         if font_path.exists():
-            font_manager.fontManager.addfont(str(font_path))
-            font_name = font_manager.FontProperties(fname=str(font_path)).get_name()
-            plt.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans"]
-            plt.rcParams["axes.unicode_minus"] = False
-            return
+            try:
+                font_manager.fontManager.addfont(str(font_path))
+                font_name = font_manager.FontProperties(fname=str(font_path)).get_name()
+                plt.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans"]
+                plt.rcParams["axes.unicode_minus"] = False
+                return
+            except Exception:
+                continue
+    # 兜底：使用默认 sans-serif，至少保证程序不报错
+    plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
 
 
 setup_chinese_font()
@@ -143,6 +162,7 @@ def train_dqn(env: BeerGameEnv, agent: DQNAgent, cfg: dict):
 
 
 def plot_training(scores: np.ndarray, output_path: str | Path, window: int = 50):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scores = np.asarray(scores, dtype=np.float32)
@@ -171,7 +191,7 @@ def plot_training(scores: np.ndarray, output_path: str | Path, window: int = 50)
     plt.title("DQN训练奖励曲线")
     plt.legend()
     plt.tight_layout()
-    plt.savefig(output_path)
+    plt.savefig(output_path, dpi=220)
     plt.close()
 
 
@@ -310,6 +330,7 @@ def plot_dqn_ablation_comparison(results: dict, output_path: str | Path):
 
 
 def plot_baseline_comparison(results: dict, output_path: str | Path):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn"]
@@ -330,6 +351,7 @@ def plot_baseline_comparison(results: dict, output_path: str | Path):
 
 
 def plot_background_policy_comparison(results: dict, output_path: str | Path):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     method_names = ["random_background", "base_stock_background"]
@@ -431,6 +453,7 @@ def plot_background_policy_comparison(results: dict, output_path: str | Path):
 
 
 def plot_multiagent_training(scores: np.ndarray, output_path: str | Path, window: int = 50):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scores = np.asarray(scores, dtype=np.float32)
@@ -455,6 +478,7 @@ def plot_multiagent_training(scores: np.ndarray, output_path: str | Path, window
 
 
 def plot_multiagent_eval_curve(eval_points: np.ndarray, eval_scores: np.ndarray, output_path: str | Path):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     eval_points = np.asarray(eval_points, dtype=np.int32)
@@ -479,6 +503,7 @@ def plot_multiagent_eval_curve(eval_points: np.ndarray, eval_scores: np.ndarray,
 
 
 def plot_multiagent_comparison(summary: dict, output_path: str | Path):
+    setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     method_names = ["random_all", "base_stock_all", "single_agent_ddqn", "multiagent_ddqn"]

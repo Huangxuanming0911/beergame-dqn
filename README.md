@@ -87,24 +87,37 @@ configs/
   default.json               # 环境、算法和训练配置
 ```
 
+## 环境安装
+
+```bash
+cd /path/to/beergame-dqn
+pip install -r requirements.txt
+```
+
+或直接使用 `uv`：
+
+```bash
+uv run --with torch --with numpy --with matplotlib --index-url https://pypi.tuna.tsinghua.edu.cn/simple python -m beergame.run_baselines --config configs/default.json
+```
+
 ## 运行方式
 
 训练并评估全部 baseline 与算法消融：
 
-```powershell
-cd C:\homework\multiagent\finalwork
+```bash
+cd /path/to/beergame-dqn
 python -m beergame.run_baselines --config configs/default.json
 ```
 
 如果已有模型，只想跳过已存在模型的训练并重新评估：
 
-```powershell
+```bash
 python -m beergame.run_baselines --config configs/default.json --skip-train
 ```
 
 运行其他企业背景策略对比实验：
 
-```powershell
+```bash
 python -m beergame.run_background_experiments --config configs/default.json
 ```
 
@@ -117,9 +130,17 @@ python -m beergame.run_background_experiments --config configs/default.json
 
 运行多智能体实验：
 
-```powershell
+```bash
 python -m beergame.run_multiagent --config configs/default.json
 ```
+
+绘制最终策略订购行为对比：
+
+```bash
+python -m beergame.plot_policy_behavior --config configs/default.json --seed 123
+```
+
+输出到 `figures/policy_behavior/behavior_comparison.png`。
 
 该实验采用 Independent Dueling Double DQN：
 
@@ -133,28 +154,45 @@ python -m beergame.run_multiagent --config configs/default.json
 
 如果已有多智能体模型，只想重新评估和重画图：
 
-```powershell
+```bash
 python -m beergame.run_multiagent --config configs/default.json --skip-train
 ```
 
 ## 当前算法消融结果
 
-当前配置下，每个算法训练 300 个 episode、评估 20 个 episode。展示用 seed=42 的结果如下：
+当前配置下，每个算法在 3 个 seed（`[42, 123, 456]`）上各训练 300 个 episode、评估 20 个 episode，共 60 个评估 episode。结果如下：
 
-| 方法 | 平均 reward | 标准差 | seed均值 |
+| 方法 | 平均 reward | 标准差 | seed 均值 |
 | --- | ---: | ---: | --- |
-| `random` | -2659.18 | 1980.17 | -2659.18 |
-| `base_stock` | -3979.18 | 833.86 | -3979.18 |
-| `dqn` | 758.08 | 90.27 | 758.08 |
-| `double_dqn` | 819.15 | 83.34 | 819.15 |
-| `dueling_dqn` | 763.00 | 100.82 | 763.00 |
-| `dueling_double_dqn` | 831.95 | 104.36 | 831.95 |
+| `random` | -3435.22 | 2511.29 | -2659.18 / -4013.85 / -3632.62 |
+| `base_stock` | -3885.23 | 824.78 | -3979.18 / -3787.88 / -3888.65 |
+| `dqn` | 760.93 | 109.97 | 789.95 / 744.67 / 748.17 |
+| `double_dqn` | 797.19 | 117.85 | 813.00 / 777.22 / 801.35 |
+| `dueling_dqn` | 781.23 | 126.05 | 792.53 / 762.03 / 789.15 |
+| `dueling_double_dqn` | 804.46 | 114.58 | 838.55 / 787.10 / 787.72 |
+
+训练曲线会画出 seed 间均值与标准差带。
 
 完整结果保存在：
 
 ```text
 results/baselines/baseline_summary.json
 figures/baselines/baseline_comparison.png
+```
+
+## 最终策略订购行为对比
+
+运行 `plot_policy_behavior` 可以在同一个 episode 中对比不同策略的订货量、库存、需求和即时奖励：
+
+```bash
+python -m beergame.plot_policy_behavior --config configs/default.json --seed 123
+```
+
+输出：
+
+```text
+figures/policy_behavior/behavior_comparison.png
+figures/policy_behavior/behavior_records.json
 ```
 
 ## 背景策略对比结果
@@ -256,6 +294,13 @@ results/background/
 figures/background/
 ```
 
+最终策略订购行为输出：
+
+```text
+figures/policy_behavior/behavior_comparison.png
+figures/policy_behavior/behavior_records.json
+```
+
 多智能体实验输出：
 
 ```text
@@ -266,9 +311,10 @@ figures/multiagent/
 
 ## 快速检查
 
-```powershell
-python -m py_compile beergame\dqn.py beergame\experiments.py beergame\run_baselines.py beergame\run_background_experiments.py beergame\run_multiagent.py
+```bash
+python -m py_compile beergame/dqn.py beergame/experiments.py beergame/run_baselines.py beergame/run_background_experiments.py beergame/run_multiagent.py beergame/plot_policy_behavior.py
 python -m beergame.run_baselines --config configs/default.json --skip-train
 python -m beergame.run_background_experiments --config configs/default.json
 python -m beergame.run_multiagent --config configs/default.json
+python -m beergame.plot_policy_behavior --config configs/default.json
 ```

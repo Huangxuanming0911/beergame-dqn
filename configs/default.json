@@ -13,7 +13,7 @@
   "experiment": {
     "firm_id": 1,
     "eval_episodes": 20,
-    "train_seeds": [42],
+    "train_seeds": [42, 123, 456],
     "output_dir": "results/baselines",
     "figure_dir": "figures/baselines",
     "model_dir": "models/baselines"
