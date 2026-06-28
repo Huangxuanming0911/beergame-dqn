@@ -173,12 +173,18 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 
 训练曲线会画出 seed 间均值与标准差带。
 
+![Baseline 与算法消融评估结果](figures/baselines/baseline_comparison.png)
+
 完整结果保存在：
 
 ```text
 results/baselines/baseline_summary.json
 figures/baselines/baseline_comparison.png
 ```
+
+以 Dueling Double DQN 为例的训练曲线：
+
+![Dueling Double DQN 训练曲线](figures/baselines/dueling_double_dqn_training_rewards.png)
 
 ## 最终策略订购行为对比
 
@@ -194,6 +200,8 @@ python -m beergame.plot_policy_behavior --config configs/default.json --seed 123
 figures/policy_behavior/behavior_comparison.png
 figures/policy_behavior/behavior_records.json
 ```
+
+![最终策略订购行为对比](figures/policy_behavior/behavior_comparison.png)
 
 ## 背景策略对比结果
 
@@ -212,6 +220,8 @@ figures/policy_behavior/behavior_records.json
 results/background/background_policy_summary.json
 figures/background/background_policy_comparison.png
 ```
+
+![其他企业随机背景 vs 库存补足背景](figures/background/background_policy_comparison.png)
 
 训练曲线保存为：
 
@@ -269,6 +279,10 @@ figures/multiagent/multiagent_comparison.png
 ```
 
 其中 `multiagent_eval_curve.png` 是每 50 轮进行一次无探索评估得到的曲线，包含企业0、企业1、企业2和全链路 total reward。它比训练 reward 曲线更适合判断“当前学到的最终策略是否变好”。
+
+![单智能体与多智能体策略对比](figures/multiagent/multiagent_comparison.png)
+
+![多智能体无探索评估曲线](figures/multiagent/multiagent_eval_curve.png)
 
 ## 输出文件
 
