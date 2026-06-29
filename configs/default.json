@@ -26,7 +26,8 @@
     {"name": "double_dqn", "network_type": "standard", "double_dqn": true},
     {"name": "dueling_dqn", "network_type": "dueling", "double_dqn": false},
     {"name": "dueling_double_dqn", "network_type": "dueling", "double_dqn": true},
-    {"name": "ppo", "type": "ppo"}
+    {"name": "ppo", "type": "ppo"},
+    {"name": "sac", "type": "sac"}
   ],
   "dqn": {
     "episodes": 300,
@@ -45,18 +46,38 @@
     "seed": 42
   },
   "ppo": {
-    "episodes": 300,
+    "episodes": 1000,
     "hidden_size": 64,
-    "batch_size": 64,
+    "batch_size": 256,
     "gamma": 0.99,
     "gae_lambda": 0.95,
     "learning_rate": 0.0001,
     "clip_epsilon": 0.2,
     "value_coef": 0.5,
     "entropy_coef": 0.05,
-    "update_epochs": 4,
+    "update_epochs": 10,
     "max_grad_norm": 0.5,
+    "separate_actor_critic": false,
+    "rollout_episodes": 4,
     "reward_scale": 0.001,
+    "use_reward_norm": false,
+    "use_value_clip": true,
+    "use_lr_decay": true,
+    "use_entropy_decay": true,
+    "log_every": 100,
+    "seed": 42
+  },
+  "sac": {
+    "episodes": 300,
+    "hidden_size": 64,
+    "learning_rate": 0.0003,
+    "gamma": 0.99,
+    "tau": 0.005,
+    "alpha": 0.2,
+    "buffer_size": 100000,
+    "batch_size": 64,
+    "update_every": 1,
+    "reward_scale": 1.0,
     "log_every": 50,
     "seed": 42
   },

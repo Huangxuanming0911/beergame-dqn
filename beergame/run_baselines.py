@@ -8,17 +8,21 @@ import numpy as np
 import torch
 
 from .config import load_config, make_env_config
+from .a2c import A2CAgent
 from .dqn import DQNAgent
 from .env import BeerGameEnv
 from .experiments import (
     evaluate_policy,
     plot_baseline_comparison,
     plot_training,
+    train_a2c,
     train_dqn,
     train_ppo,
+    train_sac,
 )
 from .policies import build_policy
 from .ppo import PPOAgent
+from .sac_discrete import DiscreteSACAgent
 
 
 class DQNPolicy:
@@ -38,6 +42,32 @@ class PPOPolicy:
             state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
             logits, _ = self.agent.net.forward(state_t)
             action = logits.argmax(dim=-1)
+        return int(action.item())
+
+
+class A2CPolicy:
+    def __init__(self, agent: A2CAgent):
+        self.agent = agent
+
+    def act(self, state, firm_id: int) -> int:
+        with torch.no_grad():
+            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
+            logits, _ = self.agent.net.forward(state_t)
+            action = logits.argmax(dim=-1)
+        return int(action.item())
+
+
+class SACPolicy:
+    def __init__(self, agent: DiscreteSACAgent):
+        self.agent = agent
+
+    def act(self, state, firm_id: int) -> int:
+        with torch.no_grad():
+            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
+            q1 = self.agent.q1(state_t)
+            q2 = self.agent.q2(state_t)
+            q = torch.min(q1, q2)
+            action = q.argmax(dim=-1)
         return int(action.item())
 
 
@@ -61,6 +91,9 @@ def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed
 
 def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPOAgent:
     ppo_cfg = cfg.get("ppo", {})
+    episodes = int(ppo_cfg.get("episodes", 300))
+    rollout_episodes = int(ppo_cfg.get("rollout_episodes", 4))
+    total_updates = max(1, episodes // rollout_episodes)
     return PPOAgent(
         state_dim=3,
         action_dim=env.config.max_order + 1,
@@ -72,9 +105,51 @@ def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPO
         value_coef=float(ppo_cfg.get("value_coef", 0.5)),
         entropy_coef=float(ppo_cfg.get("entropy_coef", 0.05)),
         hidden_size=int(ppo_cfg.get("hidden_size", 64)),
-        update_epochs=int(ppo_cfg.get("update_epochs", 4)),
-        batch_size=int(ppo_cfg.get("batch_size", 64)),
+        update_epochs=int(ppo_cfg.get("update_epochs", 10)),
+        batch_size=int(ppo_cfg.get("batch_size", 256)),
         max_grad_norm=float(ppo_cfg.get("max_grad_norm", 0.5)),
+        separate_actor_critic=bool(ppo_cfg.get("separate_actor_critic", False)),
+        rollout_episodes=rollout_episodes,
+        use_reward_norm=bool(ppo_cfg.get("use_reward_norm", True)),
+        use_value_clip=bool(ppo_cfg.get("use_value_clip", True)),
+        use_lr_decay=bool(ppo_cfg.get("use_lr_decay", True)),
+        use_entropy_decay=bool(ppo_cfg.get("use_entropy_decay", True)),
+        total_updates=total_updates,
+    )
+
+
+def build_a2c_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> A2CAgent:
+    a2c_cfg = cfg.get("a2c", {})
+    return A2CAgent(
+        state_dim=3,
+        action_dim=env.config.max_order + 1,
+        firm_id=firm_id,
+        lr=float(a2c_cfg.get("learning_rate", 3e-4)),
+        gamma=float(a2c_cfg.get("gamma", 0.99)),
+        value_coef=float(a2c_cfg.get("value_coef", 0.5)),
+        entropy_coef=float(a2c_cfg.get("entropy_coef", 0.05)),
+        hidden_size=int(a2c_cfg.get("hidden_size", 64)),
+        rollout_steps=int(a2c_cfg.get("rollout_steps", 20)),
+        max_grad_norm=float(a2c_cfg.get("max_grad_norm", 0.5)),
+        reward_scale=float(a2c_cfg.get("reward_scale", 1e-3)),
+    )
+
+
+def build_sac_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> DiscreteSACAgent:
+    sac_cfg = cfg.get("sac", {})
+    return DiscreteSACAgent(
+        state_dim=3,
+        action_dim=env.config.max_order + 1,
+        firm_id=firm_id,
+        lr=float(sac_cfg.get("learning_rate", 3e-4)),
+        gamma=float(sac_cfg.get("gamma", 0.99)),
+        tau=float(sac_cfg.get("tau", 0.005)),
+        alpha=float(sac_cfg.get("alpha", 0.2)),
+        hidden_size=int(sac_cfg.get("hidden_size", 64)),
+        buffer_size=int(sac_cfg.get("buffer_size", 100000)),
+        batch_size=int(sac_cfg.get("batch_size", 64)),
+        update_every=int(sac_cfg.get("update_every", 1)),
+        reward_scale=float(sac_cfg.get("reward_scale", 1.0)),
     )
 
 
@@ -142,7 +217,7 @@ def main():
 
     for algorithm in algorithms:
         name = algorithm["name"]
-        is_ppo = algorithm.get("type", "dqn").lower() == "ppo"
+        algo_type = algorithm.get("type", "dqn").lower()
         print(f"\n=== {name} ===")
         all_training_scores = []
         all_eval_scores = []
@@ -150,11 +225,21 @@ def main():
 
         for seed in train_seeds:
             print(f"--- seed={seed} ---")
-            if is_ppo:
+            if algo_type == "ppo":
                 agent = build_ppo_agent(env, cfg, firm_id, seed)
                 policy_wrapper = PPOPolicy(agent)
                 train_cfg = {**cfg.get("ppo", {}), "seed": seed}
                 train_fn = train_ppo
+            elif algo_type == "a2c":
+                agent = build_a2c_agent(env, cfg, firm_id, seed)
+                policy_wrapper = A2CPolicy(agent)
+                train_cfg = {**cfg.get("a2c", {}), "seed": seed}
+                train_fn = train_a2c
+            elif algo_type == "sac":
+                agent = build_sac_agent(env, cfg, firm_id, seed)
+                policy_wrapper = SACPolicy(agent)
+                train_cfg = {**cfg.get("sac", {}), "seed": seed}
+                train_fn = train_sac
             else:
                 agent = build_agent(env, cfg, algorithm, firm_id, seed)
                 policy_wrapper = DQNPolicy(agent)

@@ -10,10 +10,12 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager
 import numpy as np
 
+from .a2c import A2CAgent
 from .dqn import DQNAgent
 from .env import BeerGameEnv
 from .policies import build_policy
 from .ppo import PPOAgent
+from .sac_discrete import DiscreteSACAgent
 
 
 def setup_chinese_font():
@@ -169,7 +171,62 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
     base_seed = int(cfg.get("seed", 42))
     episodes = int(cfg.get("episodes", 500))
+    rollout_episodes = int(cfg.get("rollout_episodes", 4))
     reward_scale = float(cfg.get("reward_scale", 1e-3))
+    scores = []
+
+    total_updates = max(1, episodes // rollout_episodes)
+    agent.total_updates = total_updates
+
+    for episode in range(1, episodes + 1):
+        state = env.reset(seed=base_seed + episode)
+        done = False
+        score = 0.0
+
+        while not done:
+            actions = make_background_actions(
+                env,
+                state,
+                agent.firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target,
+            )
+            action = agent.act(state[agent.firm_id])
+            actions[agent.firm_id] = float(action)
+            next_state, rewards, done, _ = env.step(actions)
+            raw_reward = float(rewards[agent.firm_id, 0])
+            # Fixed reward scaling stabilizes value function; raw score is reported.
+            agent.store_transition(raw_reward * reward_scale, done)
+            state = next_state
+            score += raw_reward
+
+        scores.append(score)
+
+        if agent.should_update(done=True):
+            next_state_for_update = state[agent.firm_id]
+            loss_info = agent.update(next_state_for_update)
+            if episode % int(cfg.get("log_every", 50)) == 0:
+                avg = np.mean(scores[-int(cfg.get("log_every", 50)):])
+                loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
+                print(f"episode={episode} avg_score={avg:.2f} {loss_str}")
+
+    # Flush any remaining rollouts
+    if len(agent.states) > 0:
+        next_state_for_update = state[agent.firm_id]
+        agent.update(next_state_for_update)
+
+    return np.asarray(scores, dtype=np.float32)
+
+
+def train_a2c(env: BeerGameEnv, agent: A2CAgent, cfg: dict):
+    """Train an A2C agent for one target firm while other firms use a background policy."""
+    rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
+    base_seed = int(cfg.get("seed", 42))
+    episodes = int(cfg.get("episodes", 500))
+    log_every = int(cfg.get("log_every", 50))
     scores = []
 
     for episode in range(1, episodes + 1):
@@ -190,20 +247,59 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
             actions[agent.firm_id] = float(action)
             next_state, rewards, done, _ = env.step(actions)
             raw_reward = float(rewards[agent.firm_id, 0])
-            # Scale reward for value function stability; report raw score.
-            agent.store_transition(raw_reward * reward_scale, done)
+            agent.store_transition(raw_reward, done)
             state = next_state
             score += raw_reward
 
-        # PPO update at the end of each episode (one full rollout)
-        next_state_for_update = state[agent.firm_id] if not done else None
-        loss_info = agent.update(next_state_for_update)
+            if agent.should_update():
+                next_state_for_update = state[agent.firm_id]
+                agent.update(next_state_for_update)
+
         scores.append(score)
 
-        if episode % int(cfg.get("log_every", 50)) == 0:
-            avg = np.mean(scores[-int(cfg.get("log_every", 50)):])
-            loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
-            print(f"episode={episode} avg_score={avg:.2f} {loss_str}")
+        if episode % log_every == 0:
+            avg = np.mean(scores[-log_every:])
+            print(f"episode={episode} avg_score={avg:.2f}")
+
+    return np.asarray(scores, dtype=np.float32)
+
+
+def train_sac(env: BeerGameEnv, agent: DiscreteSACAgent, cfg: dict):
+    """Train a discrete SAC agent for one target firm while other firms use a background policy."""
+    rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
+    base_seed = int(cfg.get("seed", 42))
+    episodes = int(cfg.get("episodes", 500))
+    log_every = int(cfg.get("log_every", 50))
+    scores = []
+
+    for episode in range(1, episodes + 1):
+        state = env.reset(seed=base_seed + episode)
+        done = False
+        score = 0.0
+
+        while not done:
+            actions = make_background_actions(
+                env,
+                state,
+                agent.firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target,
+            )
+            action = agent.act(state[agent.firm_id])
+            actions[agent.firm_id] = float(action)
+            next_state, rewards, done, _ = env.step(actions)
+            reward = float(rewards[agent.firm_id, 0])
+            agent.step(state[agent.firm_id], action, reward, next_state[agent.firm_id], done)
+            state = next_state
+            score += reward
+
+        scores.append(score)
+        if episode % log_every == 0:
+            avg = np.mean(scores[-log_every:])
+            print(f"episode={episode} avg_score={avg:.2f}")
 
     return np.asarray(scores, dtype=np.float32)
 
@@ -258,6 +354,7 @@ DISPLAY_NAMES = {
     "dueling_dqn": "Dueling DQN",
     "dueling_double_dqn": "Dueling Double DQN",
     "ppo": "PPO",
+    "sac": "SAC",
     "random_background": "随机背景",
     "base_stock_background": "库存补足背景",
     "random_all": "全随机",
@@ -274,6 +371,7 @@ COLORS = {
     "dueling_dqn": "#f28e2b",
     "dueling_double_dqn": "#e15759",
     "ppo": "#76b7b2",
+    "sac": "#edc948",
     "random_background": "#4e79a7",
     "base_stock_background": "#e15759",
     "random_all": "#9aa0a6",
@@ -390,17 +488,17 @@ def plot_baseline_comparison(results: dict, output_path: str | Path):
     setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
-    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
+    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo", "sac"]
+    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo", "sac"]
 
     fig, axes = plt.subplots(
         1,
         2,
-        figsize=(14, 6),
+        figsize=(15, 6),
         gridspec_kw={"width_ratios": [1.2, 1.0]},
     )
     _draw_horizontal_comparison(axes[0], results, all_names, "所有方法整体对比")
-    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN与PPO局部放大")
+    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN、PPO与SAC局部放大")
     fig.suptitle("Baseline 与算法消融评估结果（误差线为标准差）", fontsize=15, y=0.98)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(output_path, dpi=220)
