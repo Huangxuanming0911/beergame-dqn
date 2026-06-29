@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from .config import load_config, make_env_config
 from .dqn import DQNAgent
@@ -14,8 +15,10 @@ from .experiments import (
     plot_baseline_comparison,
     plot_training,
     train_dqn,
+    train_ppo,
 )
 from .policies import build_policy
+from .ppo import PPOAgent
 
 
 class DQNPolicy:
@@ -24,6 +27,18 @@ class DQNPolicy:
 
     def act(self, state, firm_id: int) -> int:
         return self.agent.act(state[firm_id], epsilon=0.0)
+
+
+class PPOPolicy:
+    def __init__(self, agent: PPOAgent):
+        self.agent = agent
+
+    def act(self, state, firm_id: int) -> int:
+        with torch.no_grad():
+            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
+            logits, _ = self.agent.net.forward(state_t)
+            action = logits.argmax(dim=-1)
+        return int(action.item())
 
 
 def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed: int) -> DQNAgent:
@@ -41,6 +56,25 @@ def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed
         network_type=algorithm.get("network_type", "standard"),
         double_dqn=bool(algorithm.get("double_dqn", False)),
         seed=seed,
+    )
+
+
+def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPOAgent:
+    ppo_cfg = cfg.get("ppo", {})
+    return PPOAgent(
+        state_dim=3,
+        action_dim=env.config.max_order + 1,
+        firm_id=firm_id,
+        lr=float(ppo_cfg.get("learning_rate", 1e-4)),
+        gamma=float(ppo_cfg.get("gamma", 0.99)),
+        gae_lambda=float(ppo_cfg.get("gae_lambda", 0.95)),
+        clip_epsilon=float(ppo_cfg.get("clip_epsilon", 0.2)),
+        value_coef=float(ppo_cfg.get("value_coef", 0.5)),
+        entropy_coef=float(ppo_cfg.get("entropy_coef", 0.05)),
+        hidden_size=int(ppo_cfg.get("hidden_size", 64)),
+        update_epochs=int(ppo_cfg.get("update_epochs", 4)),
+        batch_size=int(ppo_cfg.get("batch_size", 64)),
+        max_grad_norm=float(ppo_cfg.get("max_grad_norm", 0.5)),
     )
 
 
@@ -108,6 +142,7 @@ def main():
 
     for algorithm in algorithms:
         name = algorithm["name"]
+        is_ppo = algorithm.get("type", "dqn").lower() == "ppo"
         print(f"\n=== {name} ===")
         all_training_scores = []
         all_eval_scores = []
@@ -115,13 +150,22 @@ def main():
 
         for seed in train_seeds:
             print(f"--- seed={seed} ---")
-            agent = build_agent(env, cfg, algorithm, firm_id, seed)
+            if is_ppo:
+                agent = build_ppo_agent(env, cfg, firm_id, seed)
+                policy_wrapper = PPOPolicy(agent)
+                train_cfg = {**cfg.get("ppo", {}), "seed": seed}
+                train_fn = train_ppo
+            else:
+                agent = build_agent(env, cfg, algorithm, firm_id, seed)
+                policy_wrapper = DQNPolicy(agent)
+                train_cfg = {**cfg["dqn"], "seed": seed}
+                train_fn = train_dqn
+
             model_path = model_dir / f"{name}_seed_{seed}_firm_{firm_id}_tplus1.pt"
-            train_cfg = {**cfg["dqn"], "seed": seed}
             if args.skip_train and model_path.exists():
                 agent.load(model_path)
             else:
-                scores = train_dqn(env, agent, train_cfg)
+                scores = train_fn(env, agent, train_cfg)
                 agent.save(model_path)
                 np.save(output_dir / f"{name}_seed_{seed}_training_scores.npy", scores)
             if (output_dir / f"{name}_seed_{seed}_training_scores.npy").exists():
@@ -129,7 +173,7 @@ def main():
 
             eval_result = evaluate_policy(
                 env,
-                DQNPolicy(agent),
+                policy_wrapper,
                 firm_id,
                 eval_episodes,
                 seed=seed,

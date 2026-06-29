@@ -13,6 +13,7 @@ import numpy as np
 from .dqn import DQNAgent
 from .env import BeerGameEnv
 from .policies import build_policy
+from .ppo import PPOAgent
 
 
 def setup_chinese_font():
@@ -161,11 +162,65 @@ def train_dqn(env: BeerGameEnv, agent: DQNAgent, cfg: dict):
     return np.asarray(scores, dtype=np.float32)
 
 
-def plot_training(scores: np.ndarray, output_path: str | Path, window: int = 50):
+def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
+    """Train a PPO agent for one target firm while other firms use a background policy."""
+    rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
+    base_seed = int(cfg.get("seed", 42))
+    episodes = int(cfg.get("episodes", 500))
+    reward_scale = float(cfg.get("reward_scale", 1e-3))
+    scores = []
+
+    for episode in range(1, episodes + 1):
+        state = env.reset(seed=base_seed + episode)
+        done = False
+        score = 0.0
+
+        while not done:
+            actions = make_background_actions(
+                env,
+                state,
+                agent.firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target,
+            )
+            action = agent.act(state[agent.firm_id])
+            actions[agent.firm_id] = float(action)
+            next_state, rewards, done, _ = env.step(actions)
+            raw_reward = float(rewards[agent.firm_id, 0])
+            # Scale reward for value function stability; report raw score.
+            agent.store_transition(raw_reward * reward_scale, done)
+            state = next_state
+            score += raw_reward
+
+        # PPO update at the end of each episode (one full rollout)
+        next_state_for_update = state[agent.firm_id] if not done else None
+        loss_info = agent.update(next_state_for_update)
+        scores.append(score)
+
+        if episode % int(cfg.get("log_every", 50)) == 0:
+            avg = np.mean(scores[-int(cfg.get("log_every", 50)):])
+            loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
+            print(f"episode={episode} avg_score={avg:.2f} {loss_str}")
+
+    return np.asarray(scores, dtype=np.float32)
+
+
+def plot_training(
+    scores: np.ndarray,
+    output_path: str | Path,
+    window: int = 50,
+    title: str | None = None,
+):
     setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     scores = np.asarray(scores, dtype=np.float32)
+
+    if title is None:
+        title = f"{output_path.stem.replace('_training_rewards', '').upper()} 训练奖励曲线"
 
     if scores.ndim == 1:
         moving = np.array([np.mean(scores[max(0, i - window + 1): i + 1]) for i in range(len(scores))])
@@ -188,7 +243,7 @@ def plot_training(scores: np.ndarray, output_path: str | Path, window: int = 50)
 
     plt.xlabel("训练轮次")
     plt.ylabel("奖励")
-    plt.title("DQN训练奖励曲线")
+    plt.title(title)
     plt.legend()
     plt.tight_layout()
     plt.savefig(output_path, dpi=220)
@@ -202,6 +257,7 @@ DISPLAY_NAMES = {
     "double_dqn": "Double DQN",
     "dueling_dqn": "Dueling DQN",
     "dueling_double_dqn": "Dueling Double DQN",
+    "ppo": "PPO",
     "random_background": "随机背景",
     "base_stock_background": "库存补足背景",
     "random_all": "全随机",
@@ -217,6 +273,7 @@ COLORS = {
     "double_dqn": "#59a14f",
     "dueling_dqn": "#f28e2b",
     "dueling_double_dqn": "#e15759",
+    "ppo": "#76b7b2",
     "random_background": "#4e79a7",
     "base_stock_background": "#e15759",
     "random_all": "#9aa0a6",
@@ -333,17 +390,17 @@ def plot_baseline_comparison(results: dict, output_path: str | Path):
     setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn"]
-    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn"]
+    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
+    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
 
     fig, axes = plt.subplots(
         1,
         2,
-        figsize=(13, 6),
+        figsize=(14, 6),
         gridspec_kw={"width_ratios": [1.2, 1.0]},
     )
     _draw_horizontal_comparison(axes[0], results, all_names, "所有方法整体对比")
-    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN系列局部放大")
+    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN与PPO局部放大")
     fig.suptitle("Baseline 与算法消融评估结果（误差线为标准差）", fontsize=15, y=0.98)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(output_path, dpi=220)

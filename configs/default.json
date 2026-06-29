@@ -25,7 +25,8 @@
     {"name": "dqn", "network_type": "standard", "double_dqn": false},
     {"name": "double_dqn", "network_type": "standard", "double_dqn": true},
     {"name": "dueling_dqn", "network_type": "dueling", "double_dqn": false},
-    {"name": "dueling_double_dqn", "network_type": "dueling", "double_dqn": true}
+    {"name": "dueling_double_dqn", "network_type": "dueling", "double_dqn": true},
+    {"name": "ppo", "type": "ppo"}
   ],
   "dqn": {
     "episodes": 300,
@@ -41,6 +42,22 @@
     "eps_decay": 0.99,
     "log_every": 50,
     "plot_window": 50,
+    "seed": 42
+  },
+  "ppo": {
+    "episodes": 300,
+    "hidden_size": 64,
+    "batch_size": 64,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "learning_rate": 0.0001,
+    "clip_epsilon": 0.2,
+    "value_coef": 0.5,
+    "entropy_coef": 0.05,
+    "update_epochs": 4,
+    "max_grad_norm": 0.5,
+    "reward_scale": 0.001,
+    "log_every": 50,
     "seed": 42
   },
   "background_experiment": {

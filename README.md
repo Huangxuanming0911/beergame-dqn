@@ -64,6 +64,10 @@ DQN 系列算法消融：
 - `dueling_dqn`：使用 `V(s) + A(s,a)` 分解的 Dueling 网络。
 - `dueling_double_dqn`：同时使用 Double DQN 目标和 Dueling 网络。
 
+PPO 基线：
+
+- `ppo`：离散动作 Actor-Critic PPO，使用 Clipped Surrogate Objective 和 GAE 优势估计。
+
 背景策略实验：
 
 - `random_background`：除目标企业外，其他企业随机订货。
@@ -170,8 +174,11 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 | `double_dqn` | 797.19 | 117.85 | 813.00 / 777.22 / 801.35 |
 | `dueling_dqn` | 781.23 | 126.05 | 792.53 / 762.03 / 789.15 |
 | `dueling_double_dqn` | 804.46 | 114.58 | 838.55 / 787.10 / 787.72 |
+| `ppo` | 471.30 | 301.39 | 704.33 / 76.15 / 633.42 |
 
 训练曲线会画出 seed 间均值与标准差带。
+
+**结果分析**：DQN 系列在本环境中表现最稳定，`Dueling Double DQN` 平均奖励最高（804.46）。PPO 在 seed 42 和 seed 456 上能达到 600–700 的奖励水平，但 seed 123 出现策略崩溃（仅 76.15），导致整体均值和标准差显著差于 DQN 系列。这说明在小动作空间、短 episode 的离散控制任务上，PPO 对初始化和超参数更敏感，而基于值函数的方法（DQN 系列）具有更高的样本效率和稳定性。
 
 ![Baseline 与算法消融评估结果](figures/baselines/baseline_comparison.png)
 
@@ -182,9 +189,11 @@ results/baselines/baseline_summary.json
 figures/baselines/baseline_comparison.png
 ```
 
-以 Dueling Double DQN 为例的训练曲线：
+以 Dueling Double DQN 和 PPO 为例的训练曲线：
 
 ![Dueling Double DQN 训练曲线](figures/baselines/dueling_double_dqn_training_rewards.png)
+
+![PPO 训练曲线](figures/baselines/ppo_training_rewards.png)
 
 ## 最终策略订购行为对比
 
