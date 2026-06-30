@@ -196,6 +196,8 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     background_policy = str(cfg.get("background_policy", "random"))
     background_target = int(cfg.get("background_base_stock_target", env.config.initial_inventory))
     base_seed = int(cfg.get("seed", 42))
+    randomize_episode_seed = bool(cfg.get("randomize_episode_seed", False))
+    rng_for_random_seeds = np.random.default_rng(base_seed)
     episodes = int(cfg.get("episodes", 500))
     rollout_episodes = int(cfg.get("rollout_episodes", 4))
     reward_scale = float(cfg.get("reward_scale", 1e-3))
@@ -226,7 +228,8 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     agent.total_updates = total_updates
 
     for episode in range(1, episodes + 1):
-        state = env.reset(seed=base_seed + episode)
+        episode_seed = int(rng_for_random_seeds.integers(0, 1_000_000_000)) if randomize_episode_seed else base_seed + episode
+        state = env.reset(seed=episode_seed)
         agent.reset_history()
         done = False
         score = 0.0
@@ -239,8 +242,8 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
         # For relative reward: rollout a baseline policy on the same demand stream.
         if use_relative_reward:
             baseline_env = BeerGameEnv(env.config)
-            baseline_env.rng = np.random.default_rng(base_seed + episode)
-            baseline_env.reset(seed=base_seed + episode)
+            baseline_env.rng = np.random.default_rng(episode_seed)
+            baseline_env.reset(seed=episode_seed)
             baseline_state = state.copy()
             baseline_reward_sum = 0.0
             baseline_step = 0
