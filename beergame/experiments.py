@@ -9,13 +9,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 import numpy as np
+import torch
 
-from .a2c import A2CAgent
 from .dqn import DQNAgent
 from .env import BeerGameEnv
 from .policies import build_policy
 from .ppo import PPOAgent
 from .sac_discrete import DiscreteSACAgent
+from .vec_env import VectorizedBeerGameEnv
 
 
 def setup_chinese_font():
@@ -81,6 +82,29 @@ def make_background_actions(
     return actions
 
 
+def make_background_actions_vec(
+    env_vec: VectorizedBeerGameEnv,
+    states: np.ndarray,
+    firm_id: int,
+    rng: np.random.Generator,
+    background_policy: str = "random",
+    target_inventory: int | None = None,
+) -> np.ndarray:
+    """Generate background actions for all parallel environments."""
+    n, m = env_vec.num_envs, env_vec.num_firms
+    max_order = env_vec.config.max_order
+    actions = np.zeros((n, m), dtype=np.float32)
+    if background_policy == "random":
+        actions = rng.integers(0, max_order + 1, size=(n, m)).astype(np.float32)
+    elif background_policy == "base_stock":
+        target = env_vec.config.initial_inventory if target_inventory is None else target_inventory
+        inventory = states[:, :, 2]
+        actions = np.clip(np.rint(target - inventory), 0, max_order).astype(np.float32)
+    else:
+        raise ValueError(f"未知背景策略: {background_policy}")
+    return actions
+
+
 def evaluate_policy(
     env: BeerGameEnv,
     policy,
@@ -95,6 +119,8 @@ def evaluate_policy(
     histories = {"orders": [], "inventory": [], "demand": [], "satisfied": [], "rewards": []}
     for episode in range(episodes):
         state = env.reset(seed=None if seed is None else seed + episode)
+        if hasattr(policy, "reset"):
+            policy.reset()
         done = False
         score = 0.0
         ep = {key: [] for key in histories}
@@ -173,6 +199,17 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     episodes = int(cfg.get("episodes", 500))
     rollout_episodes = int(cfg.get("rollout_episodes", 4))
     reward_scale = float(cfg.get("reward_scale", 1e-3))
+
+    # Reward-shaping options (see SRDQN feedback / externality shaping literature).
+    use_feedback = bool(cfg.get("use_feedback_shaping", False))
+    feedback_coef = float(cfg.get("feedback_coef", 1.0))
+    use_externality = bool(cfg.get("use_externality_shaping", False))
+    externality_coef = float(cfg.get("externality_coef", 1.0))
+    use_smooth = bool(cfg.get("use_action_smoothing", False))
+    smooth_coef = float(cfg.get("action_smooth_coef", 0.1))
+
+    use_system_reward = bool(cfg.get("use_system_reward", False))
+
     scores = []
 
     total_updates = max(1, episodes // rollout_episodes)
@@ -180,8 +217,14 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
 
     for episode in range(1, episodes + 1):
         state = env.reset(seed=base_seed + episode)
+        agent.reset_history()
         done = False
         score = 0.0
+        ep_agent_total = 0.0
+        ep_team_total = 0.0
+        ep_others_cost = 0.0
+        ep_length = 0
+        last_action = None
 
         while not done:
             actions = make_background_actions(
@@ -192,20 +235,56 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
                 background_policy=background_policy,
                 target_inventory=background_target,
             )
-            action = agent.act(state[agent.firm_id])
+            action = agent.act(state[agent.firm_id], critic_state=state.flatten())
             actions[agent.firm_id] = float(action)
-            next_state, rewards, done, _ = env.step(actions)
+            next_state, rewards, done, info = env.step(actions)
             raw_reward = float(rewards[agent.firm_id, 0])
-            # Fixed reward scaling stabilizes value function; raw score is reported.
-            agent.store_transition(raw_reward * reward_scale, done)
+            team_reward = float(rewards.sum())
+
+            shaped_reward = team_reward * reward_scale if use_system_reward else raw_reward * reward_scale
+            if use_smooth and last_action is not None:
+                shaped_reward -= smooth_coef * abs(int(action) - int(last_action)) * reward_scale
+            last_action = action
+
+            agent.store_transition(shaped_reward, done)
             state = next_state
             score += raw_reward
+            ep_agent_total += raw_reward
+            ep_team_total += team_reward
+            ep_length += 1
+
+            if use_externality:
+                demand = info["demand"]
+                satisfied = info["satisfied_demand"]
+                inventory = info["inventory"]
+                h = env.config.holding_cost
+                c = env.config.lost_sales_cost
+                for j in range(env.num_firms):
+                    if j == agent.firm_id:
+                        continue
+                    lost = max(float(demand[j]) - float(satisfied[j]), 0.0)
+                    ep_others_cost += h * float(inventory[j]) + c * lost
+
+        if ep_length > 0:
+            if use_feedback:
+                # SRDQN-style feedback: reward the agent for the average profit of the
+                # other supply-chain stages, aligning local learning with total profit.
+                others_avg_per_step = (ep_team_total - ep_agent_total) / ep_length
+                bonus_per_step = feedback_coef * others_avg_per_step * reward_scale
+                agent.shape_last_episode(bonus_per_step, ep_length)
+            if use_externality:
+                # Penalize the agent for the true externalities it imposes on others
+                # (holding + lost-sales costs), encouraging system-wide coordination.
+                others_cost_avg = ep_others_cost / ep_length
+                penalty_per_step = -externality_coef * others_cost_avg * reward_scale
+                agent.shape_last_episode(penalty_per_step, ep_length)
 
         scores.append(score)
 
         if agent.should_update(done=True):
             next_state_for_update = state[agent.firm_id]
-            loss_info = agent.update(next_state_for_update)
+            next_critic_state_for_update = state.flatten()
+            loss_info = agent.update(next_state_for_update, next_critic_state_for_update)
             if episode % int(cfg.get("log_every", 50)) == 0:
                 avg = np.mean(scores[-int(cfg.get("log_every", 50)):])
                 loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
@@ -214,9 +293,293 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     # Flush any remaining rollouts
     if len(agent.states) > 0:
         next_state_for_update = state[agent.firm_id]
-        agent.update(next_state_for_update)
+        next_critic_state_for_update = state.flatten()
+        agent.update(next_state_for_update, next_critic_state_for_update)
 
     return np.asarray(scores, dtype=np.float32)
+
+
+def train_ppo_best(
+    env: BeerGameEnv,
+    agent: PPOAgent,
+    cfg: dict,
+    policy_class=None,
+) -> np.ndarray:
+    """Train PPO and keep the checkpoint with the highest evaluation reward.
+
+    Every ``eval_every`` episodes the current policy is evaluated on
+    ``eval_episodes`` fresh episodes.  The best-performing checkpoint is saved
+    and restored at the end of training, which often yields a more stable and
+    higher final reward than simply using the last iterate.
+    """
+    rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(
+        cfg.get("background_base_stock_target", env.config.initial_inventory)
+    )
+    base_seed = int(cfg.get("seed", 42))
+    episodes = int(cfg.get("episodes", 500))
+    rollout_episodes = int(cfg.get("rollout_episodes", 4))
+    reward_scale = float(cfg.get("reward_scale", 1e-3))
+    use_feedback = bool(cfg.get("use_feedback_shaping", False))
+    feedback_coef = float(cfg.get("feedback_coef", 1.0))
+    use_externality = bool(cfg.get("use_externality_shaping", False))
+    externality_coef = float(cfg.get("externality_coef", 1.0))
+    use_smooth = bool(cfg.get("use_action_smoothing", False))
+    smooth_coef = float(cfg.get("action_smooth_coef", 0.1))
+    eval_every = int(cfg.get("eval_every", 50))
+    eval_episodes = int(cfg.get("eval_episodes", 20))
+    use_system_reward = bool(cfg.get("use_system_reward", False))
+
+    scores = []
+
+    total_updates = max(1, episodes // rollout_episodes)
+    agent.total_updates = total_updates
+
+    best_path = Path(cfg.get("model_dir", "models/tmp")) / f"ppo_best_seed_{base_seed}.pt"
+    best_path.parent.mkdir(parents=True, exist_ok=True)
+    best_eval = -float("inf")
+
+    class _PPOPolicy:
+        def __init__(self, agent: PPOAgent):
+            self.agent = agent
+
+        def act(self, state: np.ndarray, firm_id: int) -> int:
+            with torch.no_grad():
+                state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
+                logits, _ = self.agent.net(state_t)
+                return int(logits.argmax(dim=-1).item())
+
+    eval_policy = policy_class(agent) if policy_class is not None else _PPOPolicy(agent)
+
+    for episode in range(1, episodes + 1):
+        state = env.reset(seed=base_seed + episode)
+        agent.reset_history()
+        done = False
+        score = 0.0
+        ep_agent_total = 0.0
+        ep_team_total = 0.0
+        ep_others_cost = 0.0
+        ep_length = 0
+        last_action = None
+
+        while not done:
+            actions = make_background_actions(
+                env,
+                state,
+                agent.firm_id,
+                rng,
+                background_policy=background_policy,
+                target_inventory=background_target,
+            )
+            action = agent.act(state[agent.firm_id], critic_state=state.flatten())
+            actions[agent.firm_id] = float(action)
+            next_state, rewards, done, info = env.step(actions)
+            raw_reward = float(rewards[agent.firm_id, 0])
+            team_reward = float(rewards.sum())
+
+            shaped_reward = team_reward * reward_scale if use_system_reward else raw_reward * reward_scale
+            if use_smooth and last_action is not None:
+                shaped_reward -= smooth_coef * abs(int(action) - int(last_action)) * reward_scale
+            last_action = action
+
+            agent.store_transition(shaped_reward, done)
+            state = next_state
+            score += raw_reward
+            ep_agent_total += raw_reward
+            ep_team_total += team_reward
+            ep_length += 1
+
+            if use_externality:
+                demand = info["demand"]
+                satisfied = info["satisfied_demand"]
+                inventory = info["inventory"]
+                h = env.config.holding_cost
+                c = env.config.lost_sales_cost
+                for j in range(env.num_firms):
+                    if j == agent.firm_id:
+                        continue
+                    lost = max(float(demand[j]) - float(satisfied[j]), 0.0)
+                    ep_others_cost += h * float(inventory[j]) + c * lost
+
+        if ep_length > 0:
+            if use_feedback:
+                others_avg_per_step = (ep_team_total - ep_agent_total) / ep_length
+                bonus_per_step = feedback_coef * others_avg_per_step * reward_scale
+                agent.shape_last_episode(bonus_per_step, ep_length)
+            if use_externality:
+                others_cost_avg = ep_others_cost / ep_length
+                penalty_per_step = -externality_coef * others_cost_avg * reward_scale
+                agent.shape_last_episode(penalty_per_step, ep_length)
+
+        scores.append(score)
+
+        if agent.should_update(done=True):
+            next_state_for_update = state[agent.firm_id]
+            next_critic_state_for_update = state.flatten()
+            loss_info = agent.update(next_state_for_update, next_critic_state_for_update)
+
+            if episode % eval_every == 0 or episode == episodes:
+                eval_result = evaluate_policy(
+                    env,
+                    eval_policy,
+                    agent.firm_id,
+                    eval_episodes,
+                    seed=base_seed,
+                )
+                eval_mean = float(np.mean(eval_result["scores"]))
+                if eval_mean > best_eval:
+                    best_eval = eval_mean
+                    agent.save(best_path)
+                avg = np.mean(scores[-min(eval_every, len(scores)):])
+                loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
+                print(
+                    f"episode={episode} train_avg={avg:.2f} eval_mean={eval_mean:.2f} "
+                    f"best={best_eval:.2f} {loss_str}"
+                )
+
+    if len(agent.states) > 0:
+        next_state_for_update = state[agent.firm_id]
+        next_critic_state_for_update = state.flatten()
+        agent.update(next_state_for_update, next_critic_state_for_update)
+
+    if best_path.exists():
+        agent.load(best_path)
+
+    return np.asarray(scores, dtype=np.float32)
+
+
+def train_ppo_vec(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
+    """Vectorized PPO training: parallel envs + batched network forward.
+
+    This keeps the same total amount of environment interaction and gradient
+    updates as ``train_ppo`` but reduces wall-clock time by stepping multiple
+    environments in parallel and evaluating the policy on a batch of states.
+    Transitions from each parallel environment are kept as contiguous
+    trajectories so GAE is computed correctly.
+    """
+    rng = np.random.default_rng(cfg.get("seed", 42))
+    background_policy = str(cfg.get("background_policy", "random"))
+    background_target = int(
+        cfg.get("background_base_stock_target", env.config.initial_inventory)
+    )
+    base_seed = int(cfg.get("seed", 42))
+    episodes = int(cfg.get("episodes", 500))
+    rollout_episodes = int(cfg.get("rollout_episodes", 4))
+    reward_scale = float(cfg.get("reward_scale", 1e-3))
+    num_envs = int(cfg.get("num_envs", 4))
+    device = agent.device
+
+    total_updates = max(1, episodes // rollout_episodes)
+    agent.total_updates = total_updates
+
+    env_vec = VectorizedBeerGameEnv(env.config, num_envs=num_envs, seed=base_seed)
+    obs = env_vec.reset()
+
+    # Per-environment trajectory buffers.
+    ep_states: list[list[np.ndarray]] = [[] for _ in range(num_envs)]
+    ep_actions: list[list[int]] = [[] for _ in range(num_envs)]
+    ep_log_probs: list[list[float]] = [[] for _ in range(num_envs)]
+    ep_values: list[list[float]] = [[] for _ in range(num_envs)]
+    ep_rewards: list[list[float]] = [[] for _ in range(num_envs)]
+    ep_dones: list[list[bool]] = [[] for _ in range(num_envs)]
+    ep_next_values: list[list[float]] = [[] for _ in range(num_envs)]
+
+    ep_scores = np.zeros(num_envs, dtype=np.float32)
+    all_scores: list[float] = []
+    rollout_next_values: list[float] = []
+    episodes_done = 0
+    episodes_since_update = 0
+
+    def flush_episode(env_id: int) -> None:
+        nonlocal episodes_done, episodes_since_update
+        agent.states.extend(ep_states[env_id])
+        agent.actions.extend(ep_actions[env_id])
+        agent.log_probs.extend(ep_log_probs[env_id])
+        agent.values.extend(ep_values[env_id])
+        agent.rewards.extend(ep_rewards[env_id])
+        agent.dones.extend(ep_dones[env_id])
+        rollout_next_values.extend(ep_next_values[env_id])
+
+        ep_states[env_id].clear()
+        ep_actions[env_id].clear()
+        ep_log_probs[env_id].clear()
+        ep_values[env_id].clear()
+        ep_rewards[env_id].clear()
+        ep_dones[env_id].clear()
+        ep_next_values[env_id].clear()
+
+        all_scores.append(float(ep_scores[env_id]))
+        ep_scores[env_id] = 0.0
+        episodes_done += 1
+        episodes_since_update += 1
+
+    while episodes_done < episodes:
+        target_states = obs[:, agent.firm_id, :]
+        with torch.no_grad():
+            state_t = torch.FloatTensor(target_states).to(device)
+            action_t, log_prob_t, value_t = agent.net.act(state_t)
+        actions_arr = action_t.cpu().numpy().astype(np.int64)
+        log_probs_arr = log_prob_t.cpu().numpy().astype(np.float32)
+        values_arr = value_t.cpu().numpy().astype(np.float32)
+
+        actions = make_background_actions_vec(
+            env_vec,
+            obs,
+            agent.firm_id,
+            rng,
+            background_policy=background_policy,
+            target_inventory=background_target,
+        )
+        actions[:, agent.firm_id] = actions_arr.astype(np.float32)
+
+        next_obs, rewards_all, dones, _ = env_vec.step(actions)
+        raw_rewards = rewards_all[:, agent.firm_id, 0]
+
+        with torch.no_grad():
+            next_target_states = torch.FloatTensor(next_obs[:, agent.firm_id, :]).to(
+                device
+            )
+            next_vals = agent.net(next_target_states)[1].squeeze(-1).cpu().numpy()
+        next_vals = next_vals.astype(np.float32)
+
+        for i in range(num_envs):
+            ep_states[i].append(target_states[i].copy())
+            ep_actions[i].append(int(actions_arr[i]))
+            ep_log_probs[i].append(float(log_probs_arr[i]))
+            ep_values[i].append(float(values_arr[i]))
+            ep_rewards[i].append(float(raw_rewards[i]) * reward_scale)
+            done_i = bool(dones[i])
+            ep_dones[i].append(done_i)
+            ep_next_values[i].append(0.0 if done_i else float(next_vals[i]))
+            ep_scores[i] += float(raw_rewards[i])
+
+            if done_i:
+                flush_episode(i)
+
+        if episodes_since_update >= rollout_episodes and len(agent.states) > 0:
+            next_values_arr = np.asarray(rollout_next_values, dtype=np.float32)
+            loss_info = agent.update(next_values=next_values_arr)
+            rollout_next_values.clear()
+            episodes_since_update = 0
+            log_every = int(cfg.get("log_every", 50))
+            if episodes_done % log_every < num_envs or episodes_done == 0:
+                window = min(log_every, len(all_scores))
+                if window > 0:
+                    avg = np.mean(all_scores[-window:])
+                    loss_str = " ".join(f"{k}={v:.4f}" for k, v in loss_info.items())
+                    print(f"episode={episodes_done} avg_score={avg:.2f} {loss_str}")
+
+    # Flush any partial trajectories at the end.
+    for i in range(num_envs):
+        if ep_states[i]:
+            flush_episode(i)
+
+    if len(agent.states) > 0:
+        next_values_arr = np.asarray(rollout_next_values, dtype=np.float32)
+        agent.update(next_values=next_values_arr)
+
+    return np.asarray(all_scores[:episodes], dtype=np.float32)
 
 
 def train_a2c(env: BeerGameEnv, agent: A2CAgent, cfg: dict):
@@ -488,17 +851,17 @@ def plot_baseline_comparison(results: dict, output_path: str | Path):
     setup_chinese_font()
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo", "sac"]
-    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo", "sac"]
+    all_names = ["random", "base_stock", "dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
+    dqn_names = ["dqn", "double_dqn", "dueling_dqn", "dueling_double_dqn", "ppo"]
 
     fig, axes = plt.subplots(
         1,
         2,
-        figsize=(15, 6),
+        figsize=(14, 6),
         gridspec_kw={"width_ratios": [1.2, 1.0]},
     )
     _draw_horizontal_comparison(axes[0], results, all_names, "所有方法整体对比")
-    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN、PPO与SAC局部放大")
+    _draw_horizontal_comparison(axes[1], results, dqn_names, "DQN与PPO局部放大")
     fig.suptitle("Baseline 与算法消融评估结果（误差线为标准差）", fontsize=15, y=0.98)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
     fig.savefig(output_path, dpi=220)

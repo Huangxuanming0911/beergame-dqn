@@ -144,6 +144,7 @@ class DiscreteSACAgent:
         self.q1_optimizer = optim.Adam(self.q1.parameters(), lr=lr)
         self.q2_optimizer = optim.Adam(self.q2.parameters(), lr=lr)
         self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=lr)
+        self.max_grad_norm = 0.5
 
         self.buffer = ReplayBuffer(state_dim, action_dim, buffer_size)
         self.step_count = 0
@@ -190,10 +191,14 @@ class DiscreteSACAgent:
 
         self.q1_optimizer.zero_grad()
         q1_loss.backward()
+        if self.max_grad_norm > 0:
+            nn.utils.clip_grad_norm_(self.q1.parameters(), self.max_grad_norm)
         self.q1_optimizer.step()
 
         self.q2_optimizer.zero_grad()
         q2_loss.backward()
+        if self.max_grad_norm > 0:
+            nn.utils.clip_grad_norm_(self.q2.parameters(), self.max_grad_norm)
         self.q2_optimizer.step()
 
         # Update policy
@@ -209,6 +214,8 @@ class DiscreteSACAgent:
 
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
+        if self.max_grad_norm > 0:
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
         self.policy_optimizer.step()
 
         # Soft update targets

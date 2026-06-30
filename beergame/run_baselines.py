@@ -8,14 +8,12 @@ import numpy as np
 import torch
 
 from .config import load_config, make_env_config
-from .a2c import A2CAgent
 from .dqn import DQNAgent
 from .env import BeerGameEnv
 from .experiments import (
     evaluate_policy,
     plot_baseline_comparison,
     plot_training,
-    train_a2c,
     train_dqn,
     train_ppo,
     train_sac,
@@ -37,24 +35,11 @@ class PPOPolicy:
     def __init__(self, agent: PPOAgent):
         self.agent = agent
 
-    def act(self, state, firm_id: int) -> int:
-        with torch.no_grad():
-            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
-            logits, _ = self.agent.net.forward(state_t)
-            action = logits.argmax(dim=-1)
-        return int(action.item())
-
-
-class A2CPolicy:
-    def __init__(self, agent: A2CAgent):
-        self.agent = agent
+    def reset(self):
+        self.agent.reset_history()
 
     def act(self, state, firm_id: int) -> int:
-        with torch.no_grad():
-            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
-            logits, _ = self.agent.net.forward(state_t)
-            action = logits.argmax(dim=-1)
-        return int(action.item())
+        return self.agent.eval_act(state[firm_id], use_ema=self.agent.use_ema)
 
 
 class SACPolicy:
@@ -94,8 +79,12 @@ def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPO
     episodes = int(ppo_cfg.get("episodes", 300))
     rollout_episodes = int(ppo_cfg.get("rollout_episodes", 4))
     total_updates = max(1, episodes // rollout_episodes)
+    state_history_len = int(ppo_cfg.get("state_history_len", 1))
+    centralized_critic = bool(ppo_cfg.get("centralized_critic", False))
+    critic_state_dim = 3 * env.num_firms if centralized_critic else 3 * state_history_len
+    state_dim = 3 * state_history_len
     return PPOAgent(
-        state_dim=3,
+        state_dim=state_dim,
         action_dim=env.config.max_order + 1,
         firm_id=firm_id,
         lr=float(ppo_cfg.get("learning_rate", 1e-4)),
@@ -108,30 +97,22 @@ def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPO
         update_epochs=int(ppo_cfg.get("update_epochs", 10)),
         batch_size=int(ppo_cfg.get("batch_size", 256)),
         max_grad_norm=float(ppo_cfg.get("max_grad_norm", 0.5)),
+        target_kl=float(ppo_cfg.get("target_kl", 0.015)),
         separate_actor_critic=bool(ppo_cfg.get("separate_actor_critic", False)),
         rollout_episodes=rollout_episodes,
         use_reward_norm=bool(ppo_cfg.get("use_reward_norm", True)),
+        use_state_norm=bool(ppo_cfg.get("use_state_norm", True)),
         use_value_clip=bool(ppo_cfg.get("use_value_clip", True)),
         use_lr_decay=bool(ppo_cfg.get("use_lr_decay", True)),
         use_entropy_decay=bool(ppo_cfg.get("use_entropy_decay", True)),
+        state_history_len=state_history_len,
+        use_ema=bool(ppo_cfg.get("use_ema", False)),
+        ema_tau=float(ppo_cfg.get("ema_tau", 0.005)),
+        centralized_critic=centralized_critic,
+        critic_state_dim=critic_state_dim,
         total_updates=total_updates,
-    )
-
-
-def build_a2c_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> A2CAgent:
-    a2c_cfg = cfg.get("a2c", {})
-    return A2CAgent(
-        state_dim=3,
-        action_dim=env.config.max_order + 1,
-        firm_id=firm_id,
-        lr=float(a2c_cfg.get("learning_rate", 3e-4)),
-        gamma=float(a2c_cfg.get("gamma", 0.99)),
-        value_coef=float(a2c_cfg.get("value_coef", 0.5)),
-        entropy_coef=float(a2c_cfg.get("entropy_coef", 0.05)),
-        hidden_size=int(a2c_cfg.get("hidden_size", 64)),
-        rollout_steps=int(a2c_cfg.get("rollout_steps", 20)),
-        max_grad_norm=float(a2c_cfg.get("max_grad_norm", 0.5)),
-        reward_scale=float(a2c_cfg.get("reward_scale", 1e-3)),
+        activation=str(ppo_cfg.get("activation", "relu")),
+        use_layer_norm=bool(ppo_cfg.get("use_layer_norm", False)),
     )
 
 
@@ -230,11 +211,6 @@ def main():
                 policy_wrapper = PPOPolicy(agent)
                 train_cfg = {**cfg.get("ppo", {}), "seed": seed}
                 train_fn = train_ppo
-            elif algo_type == "a2c":
-                agent = build_a2c_agent(env, cfg, firm_id, seed)
-                policy_wrapper = A2CPolicy(agent)
-                train_cfg = {**cfg.get("a2c", {}), "seed": seed}
-                train_fn = train_a2c
             elif algo_type == "sac":
                 agent = build_sac_agent(env, cfg, firm_id, seed)
                 policy_wrapper = SACPolicy(agent)

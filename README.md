@@ -164,7 +164,7 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 
 ## 当前算法消融结果
 
-当前配置下，每个算法在 3 个 seed（`[42, 123, 456]`）上各训练 300 个 episode、评估 20 个 episode，共 60 个评估 episode。结果如下：
+当前配置下，每个算法在 3 个 seed（`[42, 123, 456]`）上各训练、评估 20 个 episode，共 60 个评估 episode。DQN 系列训练 300 个 episode，PPO 训练 1000 个 episode，SAC 训练 300 个 episode。结果如下：
 
 | 方法 | 平均 reward | 标准差 | seed 均值 |
 | --- | ---: | ---: | --- |
@@ -174,11 +174,18 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 | `double_dqn` | 797.19 | 117.85 | 813.00 / 777.22 / 801.35 |
 | `dueling_dqn` | 781.23 | 126.05 | 792.53 / 762.03 / 789.15 |
 | `dueling_double_dqn` | 804.46 | 114.58 | 838.55 / 787.10 / 787.72 |
-| `ppo` | 471.30 | 301.39 | 704.33 / 76.15 / 633.42 |
+| `ppo` | 779.59 | 123.68 | 753.50 / 784.72 / 800.55 |
+| `sac` | -7305.86 | 6426.45 | -11431.58 / -11120.33 / 634.33 |
 
 训练曲线会画出 seed 间均值与标准差带。
 
-**结果分析**：DQN 系列在本环境中表现最稳定，`Dueling Double DQN` 平均奖励最高（804.46）。PPO 在 seed 42 和 seed 456 上能达到 600–700 的奖励水平，但 seed 123 出现策略崩溃（仅 76.15），导致整体均值和标准差显著差于 DQN 系列。这说明在小动作空间、短 episode 的离散控制任务上，PPO 对初始化和超参数更敏感，而基于值函数的方法（DQN 系列）具有更高的样本效率和稳定性。
+**结果分析**：
+
+- DQN 系列在本环境中表现最稳定，`Dueling Double DQN` 平均奖励最高（**804.46**）。
+- PPO 经过改进（GAE、reward scaling、clipped value loss、gradient clipping、KL early stopping、lr/entropy decay、best checkpoint）后，平均奖励从最初崩溃的 471.30 提升至 **779.59**，在 seed 456 上达到 800.55，但在 seed 42 上仅 753.50，尚未稳定超过 Dueling Double DQN。
+- SAC 在本任务上极不稳定，仅 seed 456 收敛至正值，其余 seed 因离散动作与奖励尺度不匹配导致策略崩溃。
+
+这说明在小动作空间、短 episode 的离散控制任务上，基于值函数的方法（DQN 系列）具有更高的样本效率和稳定性；PPO 通过算法稳定化技巧可以接近但尚未全面超越 DQN。
 
 ![Baseline 与算法消融评估结果](figures/baselines/baseline_comparison.png)
 
