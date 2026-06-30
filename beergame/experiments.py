@@ -335,6 +335,8 @@ def train_ppo_best(
     eval_episodes = int(cfg.get("eval_episodes", 20))
     use_system_reward = bool(cfg.get("use_system_reward", False))
 
+    use_augmented_obs = bool(cfg.get("use_augmented_obs", False))
+
     scores = []
 
     total_updates = max(1, episodes // rollout_episodes)
@@ -348,11 +350,12 @@ def train_ppo_best(
         def __init__(self, agent: PPOAgent):
             self.agent = agent
 
+        def reset(self):
+            self.agent.reset_history()
+
         def act(self, state: np.ndarray, firm_id: int) -> int:
-            with torch.no_grad():
-                state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
-                logits, _ = self.agent.net(state_t)
-                return int(logits.argmax(dim=-1).item())
+            obs_state = env.get_augmented_observation() if use_augmented_obs else state
+            return self.agent.eval_act(obs_state[firm_id])
 
     eval_policy = policy_class(agent) if policy_class is not None else _PPOPolicy(agent)
 
@@ -368,6 +371,7 @@ def train_ppo_best(
         last_action = None
 
         while not done:
+            obs_state = env.get_augmented_observation() if use_augmented_obs else state
             actions = make_background_actions(
                 env,
                 state,
@@ -376,7 +380,7 @@ def train_ppo_best(
                 background_policy=background_policy,
                 target_inventory=background_target,
             )
-            action = agent.act(state[agent.firm_id], critic_state=state.flatten())
+            action = agent.act(obs_state[agent.firm_id], critic_state=obs_state.flatten())
             actions[agent.firm_id] = float(action)
             next_state, rewards, done, info = env.step(actions)
             raw_reward = float(rewards[agent.firm_id, 0])
@@ -419,8 +423,9 @@ def train_ppo_best(
         scores.append(score)
 
         if agent.should_update(done=True):
-            next_state_for_update = state[agent.firm_id]
-            next_critic_state_for_update = state.flatten()
+            obs_state = env.get_augmented_observation() if use_augmented_obs else state
+            next_state_for_update = obs_state[agent.firm_id]
+            next_critic_state_for_update = obs_state.flatten()
             loss_info = agent.update(next_state_for_update, next_critic_state_for_update)
 
             if episode % eval_every == 0 or episode == episodes:
@@ -443,8 +448,9 @@ def train_ppo_best(
                 )
 
     if len(agent.states) > 0:
-        next_state_for_update = state[agent.firm_id]
-        next_critic_state_for_update = state.flatten()
+        obs_state = env.get_augmented_observation() if use_augmented_obs else state
+        next_state_for_update = obs_state[agent.firm_id]
+        next_critic_state_for_update = obs_state.flatten()
         agent.update(next_state_for_update, next_critic_state_for_update)
 
     if best_path.exists():

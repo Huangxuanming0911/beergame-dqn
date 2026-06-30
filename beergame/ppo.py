@@ -67,6 +67,74 @@ def orthogonal_init(m: nn.Module, gain: float = 1.0) -> None:
             nn.init.constant_(m.bias.data, 0.0)
 
 
+class RecurrentActorCritic(nn.Module):
+    """LSTM-based actor-critic for discrete actions (RPPO style).
+
+    Maintains an internal hidden state so the policy can condition on history.
+    The actor and critic share an LSTM trunk but use separate output heads.
+    """
+
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        hidden_size: int = 64,
+        num_layers: int = 1,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(state_dim, hidden_size, num_layers, batch_first=True)
+        self.actor_head = nn.Linear(hidden_size, action_dim)
+        self.critic_head = nn.Linear(hidden_size, 1)
+        self.apply(lambda m: orthogonal_init(m, gain=nn.init.calculate_gain("relu")))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        # x: (batch, seq_len, state_dim) or (batch, state_dim) -> treat as seq_len=1
+        if x.ndim == 2:
+            x = x.unsqueeze(1)
+        lstm_out, hidden_out = self.lstm(x, hidden)
+        last = lstm_out[:, -1, :]
+        logits = self.actor_head(last)
+        value = self.critic_head(last)
+        return logits, value.squeeze(-1), hidden_out
+
+    def init_hidden(self, batch_size: int = 1, device: str = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
+        h = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        c = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device)
+        return (h, c)
+
+    def get_action_logits(self, x: torch.Tensor) -> torch.Tensor:
+        return self.forward(x)[0]
+
+    def act(
+        self,
+        x: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+        logits, value, hidden_out = self.forward(x, hidden)
+        dist = Categorical(logits=logits)
+        action = dist.sample()
+        log_prob = dist.log_prob(action)
+        return action, log_prob, value, hidden_out
+
+    def evaluate(
+        self,
+        x: torch.Tensor,
+        action: torch.Tensor,
+        hidden: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, value, _ = self.forward(x, hidden)
+        dist = Categorical(logits=logits)
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+        return log_prob, value, entropy
+
+
 class ActorCritic(nn.Module):
     """Actor-critic network for discrete actions.
 
@@ -207,6 +275,7 @@ class PPOAgent:
         device: str | None = None,
         activation: str = "relu",
         use_layer_norm: bool = False,
+        use_recurrent: bool = False,
     ):
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -236,27 +305,19 @@ class PPOAgent:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.activation = activation
         self.use_layer_norm = use_layer_norm
+        self.use_recurrent = use_recurrent
         self.update_count = 0
 
         # Centralized critic needs separate actor/critic bodies with different inputs.
         if centralized_critic:
             separate_actor_critic = True
 
-        self.net = ActorCritic(
-            state_dim,
-            action_dim,
-            hidden_size,
-            separate_actor_critic=separate_actor_critic,
-            critic_state_dim=self.critic_state_dim,
-            activation=activation,
-            use_layer_norm=use_layer_norm,
-        ).to(self.device)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=lr)
-        self.initial_lr = lr
-
-        # Exponential moving average of the network for stable evaluation.
-        if use_ema:
-            self.ema_net = ActorCritic(
+        if use_recurrent:
+            self.net = RecurrentActorCritic(
+                state_dim, action_dim, hidden_size, num_layers=1
+            ).to(self.device)
+        else:
+            self.net = ActorCritic(
                 state_dim,
                 action_dim,
                 hidden_size,
@@ -265,11 +326,33 @@ class PPOAgent:
                 activation=activation,
                 use_layer_norm=use_layer_norm,
             ).to(self.device)
+        self.optimizer = optim.Adam(self.net.parameters(), lr=lr)
+        self.initial_lr = lr
+
+        # Exponential moving average of the network for stable evaluation.
+        if use_ema:
+            if use_recurrent:
+                self.ema_net = RecurrentActorCritic(
+                    state_dim, action_dim, hidden_size, num_layers=1
+                ).to(self.device)
+            else:
+                self.ema_net = ActorCritic(
+                    state_dim,
+                    action_dim,
+                    hidden_size,
+                    separate_actor_critic=separate_actor_critic,
+                    critic_state_dim=self.critic_state_dim,
+                    activation=activation,
+                    use_layer_norm=use_layer_norm,
+                ).to(self.device)
             self.ema_net.load_state_dict(self.net.state_dict())
             for p in self.ema_net.parameters():
                 p.requires_grad = False
         else:
             self.ema_net = None
+
+        self._hidden: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._eval_hidden: tuple[torch.Tensor, torch.Tensor] | None = None
 
         # Running normalizers
         self.state_rms = RunningMeanStd(shape=(state_dim,))
@@ -369,7 +452,12 @@ class PPOAgent:
                 torch.FloatTensor(norm_critic_state).unsqueeze(0).to(self.device)
                 if norm_critic_state is not None else None
             )
-            action, log_prob, value = self.net.act(state_t, critic_state_t)
+            if self.use_recurrent:
+                if self._hidden is None:
+                    self._hidden = self.net.init_hidden(batch_size=1, device=self.device)
+                action, log_prob, value, self._hidden = self.net.act(state_t, self._hidden)
+            else:
+                action, log_prob, value = self.net.act(state_t, critic_state_t)
         action = int(action.item())
         log_prob = float(log_prob.item())
         value = float(value.item())
@@ -398,9 +486,23 @@ class PPOAgent:
         net = self.ema_net if (use_ema and self.ema_net is not None) else self.net
         with torch.no_grad():
             state_t = torch.FloatTensor(norm_state).unsqueeze(0).to(self.device)
-            logits = net.get_action_logits(state_t)
-            action = logits.argmax(dim=-1)
+            if self.use_recurrent:
+                if self._eval_hidden is None:
+                    self._eval_hidden = net.init_hidden(batch_size=1, device=self.device)
+                logits, _, self._eval_hidden = net.forward(state_t, self._eval_hidden)
+                action = logits.argmax(dim=-1)
+            else:
+                logits = net.get_action_logits(state_t)
+                action = logits.argmax(dim=-1)
         return int(action.item())
+
+    def reset_history(self) -> None:
+        """Clear state history and recurrent hidden states."""
+        self._state_history.clear()
+        for _ in range(self.state_history_len):
+            self._state_history.append(np.zeros(self.state_dim // self.state_history_len, dtype=np.float32))
+        self._hidden = None
+        self._eval_hidden = None
 
     def store_transition(self, reward: float, done: bool) -> None:
         """Store reward and done signal after the environment step."""
@@ -518,7 +620,11 @@ class PPOAgent:
                         critic_next_t = None
 
                     next_state_t = torch.FloatTensor(norm_next).unsqueeze(0).to(self.device)
-                    _, next_value = self.net.forward(next_state_t, critic_next_t)
+                    if self.use_recurrent:
+                        h = self.net.init_hidden(batch_size=1, device=self.device)
+                        _, next_value, _ = self.net.forward(next_state_t, h)
+                    else:
+                        _, next_value = self.net.forward(next_state_t, critic_next_t)
                     next_value = float(next_value.item())
                 else:
                     next_value = 0.0
