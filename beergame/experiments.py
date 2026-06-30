@@ -199,6 +199,7 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
     episodes = int(cfg.get("episodes", 500))
     rollout_episodes = int(cfg.get("rollout_episodes", 4))
     reward_scale = float(cfg.get("reward_scale", 1e-3))
+    use_augmented_obs = bool(cfg.get("use_augmented_obs", False))
 
     # Reward-shaping options (see SRDQN feedback / externality shaping literature).
     use_feedback = bool(cfg.get("use_feedback_shaping", False))
@@ -227,6 +228,7 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
         last_action = None
 
         while not done:
+            obs_state = env.get_augmented_observation() if use_augmented_obs else state
             actions = make_background_actions(
                 env,
                 state,
@@ -235,7 +237,7 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
                 background_policy=background_policy,
                 target_inventory=background_target,
             )
-            action = agent.act(state[agent.firm_id], critic_state=state.flatten())
+            action = agent.act(obs_state[agent.firm_id], critic_state=obs_state.flatten())
             actions[agent.firm_id] = float(action)
             next_state, rewards, done, info = env.step(actions)
             raw_reward = float(rewards[agent.firm_id, 0])
@@ -282,8 +284,9 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
         scores.append(score)
 
         if agent.should_update(done=True):
-            next_state_for_update = state[agent.firm_id]
-            next_critic_state_for_update = state.flatten()
+            obs_state = env.get_augmented_observation() if use_augmented_obs else state
+            next_state_for_update = obs_state[agent.firm_id]
+            next_critic_state_for_update = obs_state.flatten()
             loss_info = agent.update(next_state_for_update, next_critic_state_for_update)
             if episode % int(cfg.get("log_every", 50)) == 0:
                 avg = np.mean(scores[-int(cfg.get("log_every", 50)):])
@@ -292,8 +295,9 @@ def train_ppo(env: BeerGameEnv, agent: PPOAgent, cfg: dict):
 
     # Flush any remaining rollouts
     if len(agent.states) > 0:
-        next_state_for_update = state[agent.firm_id]
-        next_critic_state_for_update = state.flatten()
+        obs_state = env.get_augmented_observation() if use_augmented_obs else state
+        next_state_for_update = obs_state[agent.firm_id]
+        next_critic_state_for_update = obs_state.flatten()
         agent.update(next_state_for_update, next_critic_state_for_update)
 
     return np.asarray(scores, dtype=np.float32)

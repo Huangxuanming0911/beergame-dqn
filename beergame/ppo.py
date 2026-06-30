@@ -12,13 +12,23 @@ from __future__ import annotations
 
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
+
+
+class Transition(NamedTuple):
+    state: np.ndarray
+    action: int
+    log_prob: float
+    value: float
+    reward: float
+    done: bool
+    critic_state: np.ndarray | None
 
 
 def _make_mlp_layers(
@@ -277,8 +287,41 @@ class PPOAgent:
         self.dones: list[bool] = []
         self.episodes_since_update = 0
 
+        # Optional replay buffer for off-policy PPO (e.g., V-trace / PPO+Replay).
+        self.replay_buffer: deque[Transition] = deque(maxlen=0)
+        self.replay_capacity = 0
+        self.replay_ratio = 0.0
+
         self._state_history: deque[np.ndarray] = deque(maxlen=state_history_len)
         self.reset_history()
+
+    def set_replay_buffer(self, capacity: int, replay_ratio: float = 0.5) -> None:
+        """Enable a small replay buffer with off-policy correction.
+
+        ``replay_ratio`` controls how many replay samples are mixed into each
+        PPO update (0 = no replay, 1 = only replay).  A moderate value (0.25-0.5)
+        can improve sample efficiency on short-episode tasks.
+        """
+        self.replay_capacity = capacity
+        self.replay_ratio = max(0.0, min(1.0, replay_ratio))
+        self.replay_buffer = deque(maxlen=capacity)
+
+    def _push_replay(self) -> None:
+        """Push the current rollout into the replay buffer as individual transitions."""
+        if self.replay_capacity <= 0:
+            return
+        for i in range(len(self.states)):
+            self.replay_buffer.append(
+                Transition(
+                    state=self.states[i].copy(),
+                    action=self.actions[i],
+                    log_prob=self.log_probs[i],
+                    value=self.values[i],
+                    reward=self.rewards[i],
+                    done=self.dones[i],
+                    critic_state=self.critic_states[i].copy() if self.centralized_critic else None,
+                )
+            )
 
     def reset_history(self) -> None:
         """Clear the state history buffer (call at the start of each episode)."""
@@ -561,19 +604,91 @@ class PPOAgent:
                 if kl > self.target_kl:
                     break
 
+        # Replay-buffer updates with off-policy importance-weight correction.
+        replay_stats = self._replay_update()
+
         # Clear buffer and counters
+        self._push_replay()
         self.clear_buffer()
         self.update_count += 1
 
         if num_batches == 0:
             return {}
-        return {
+        result = {
             "loss": total_loss / num_batches,
             "policy_loss": total_policy_loss / num_batches,
             "value_loss": total_value_loss / num_batches,
             "entropy": total_entropy / num_batches,
             "lr": self.optimizer.param_groups[0]["lr"],
             "ent_coef": self.entropy_coef,
+        }
+        if replay_stats:
+            result.update(replay_stats)
+        return result
+
+    def _replay_update(self) -> dict[str, float] | None:
+        """Sample from the replay buffer and perform one epoch of off-policy PPO.
+
+        Advantages are recomputed using the current value estimate and re-normalized.
+        Importance ratios are clipped (PPO-style) to stabilize off-policy learning.
+        """
+        if self.replay_capacity <= 0 or len(self.replay_buffer) == 0:
+            return None
+
+        batch = list(self.replay_buffer)
+        # Sample a subset proportional to replay_ratio.
+        sample_size = max(self.batch_size, int(len(batch) * self.replay_ratio))
+        sample_size = min(sample_size, len(batch))
+        idx = np.random.choice(len(batch), size=sample_size, replace=False)
+        batch = [batch[i] for i in idx]
+
+        states = torch.FloatTensor(np.stack([t.state for t in batch])).to(self.device)
+        actions = torch.LongTensor([t.action for t in batch]).to(self.device)
+        old_log_probs = torch.FloatTensor([t.log_prob for t in batch]).to(self.device)
+        rewards = np.asarray([t.reward for t in batch], dtype=np.float32)
+        dones = np.asarray([t.done for t in batch], dtype=np.float32)
+        if self.centralized_critic:
+            critic_states = torch.FloatTensor(np.stack([t.critic_state for t in batch])).to(self.device)
+        else:
+            critic_states = None
+
+        with torch.no_grad():
+            _, values = self.net.forward(states, critic_states)
+            values = values.squeeze(-1).cpu().numpy()
+
+        advantages = np.zeros_like(rewards)
+        last_gae = 0.0
+        # Bootstrap from a dummy zero next-value; buffer samples are terminal-heavy.
+        for t in reversed(range(len(rewards))):
+            next_v = 0.0 if dones[t] else (values[t + 1] if t + 1 < len(values) else 0.0)
+            delta = rewards[t] + self.gamma * next_v * (1.0 - dones[t]) - values[t]
+            last_gae = delta + self.gamma * self.gae_lambda * (1.0 - dones[t]) * last_gae
+            advantages[t] = last_gae
+        returns = advantages + values
+        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+        returns_t = torch.FloatTensor(returns).to(self.device)
+        advantages_t = torch.FloatTensor(advantages).to(self.device)
+
+        log_probs, values_t, entropy = self.net.evaluate(states, actions, critic_states)
+        ratio = torch.exp(log_probs - old_log_probs)
+        surr1 = ratio * advantages_t
+        surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages_t
+        policy_loss = -torch.min(surr1, surr2).mean()
+        value_loss = nn.functional.mse_loss(values_t.squeeze(-1), returns_t)
+        loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy.mean()
+
+        self.optimizer.zero_grad()
+        loss.backward()
+        if self.max_grad_norm > 0:
+            nn.utils.clip_grad_norm_(self.net.parameters(), self.max_grad_norm)
+        self.optimizer.step()
+
+        return {
+            "replay_loss": loss.item(),
+            "replay_policy_loss": policy_loss.item(),
+            "replay_value_loss": value_loss.item(),
+            "replay_entropy": entropy.mean().item(),
         }
 
     def clear_buffer(self) -> None:
