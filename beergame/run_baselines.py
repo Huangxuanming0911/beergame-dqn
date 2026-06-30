@@ -16,6 +16,7 @@ from .experiments import (
     plot_training,
     train_dqn,
     train_ppo,
+    train_ppo_best,
     train_sac,
 )
 from .policies import build_policy
@@ -164,6 +165,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run Beergame baselines with t+1 delivery.")
     parser.add_argument("--config", default="configs/default.json")
     parser.add_argument("--skip-train", action="store_true")
+    parser.add_argument("--only", default=None, help="Comma-separated list of algorithm names to run (e.g., ppo,dueling_double_dqn).")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -180,6 +182,9 @@ def main():
         "algorithms",
         [{"name": "dqn", "network_type": "standard", "double_dqn": False}],
     )
+    if args.only:
+        only_set = set(args.only.split(","))
+        algorithms = [a for a in algorithms if a["name"] in only_set]
     train_seeds = [int(seed) for seed in cfg["experiment"].get("train_seeds", [int(cfg["env"].get("seed", 42))])]
     eval_episodes = int(cfg["experiment"].get("eval_episodes", 20))
 
@@ -210,7 +215,7 @@ def main():
                 agent = build_ppo_agent(env, cfg, firm_id, seed)
                 policy_wrapper = PPOPolicy(agent)
                 train_cfg = {**cfg.get("ppo", {}), "seed": seed}
-                train_fn = train_ppo
+                train_fn = train_ppo_best
             elif algo_type == "sac":
                 agent = build_sac_agent(env, cfg, firm_id, seed)
                 policy_wrapper = SACPolicy(agent)

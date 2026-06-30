@@ -31,3 +31,4 @@ models/background/*_seed_*_firm_1_tplus1.pt
 !models/background/*_seed_42_firm_1_tplus1.pt
 models/multiagent/*_seed_*_tplus1.pt
 !models/multiagent/*_seed_42_tplus1.pt
+models/tmp/

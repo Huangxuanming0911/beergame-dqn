@@ -119,6 +119,14 @@ python -m beergame.run_baselines --config configs/default.json
 python -m beergame.run_baselines --config configs/default.json --skip-train
 ```
 
+只训练/评估某个或某几个算法（例如只更新 PPO）：
+
+```bash
+python -m beergame.run_baselines --config configs/default.json --only ppo
+```
+
+`--only` 接受逗号分隔的算法名，如 `ppo,dueling_double_dqn`。
+
 运行其他企业背景策略对比实验：
 
 ```bash
@@ -174,18 +182,22 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 | `double_dqn` | 797.19 | 117.85 | 813.00 / 777.22 / 801.35 |
 | `dueling_dqn` | 781.23 | 126.05 | 792.53 / 762.03 / 789.15 |
 | `dueling_double_dqn` | 804.46 | 114.58 | 838.55 / 787.10 / 787.72 |
-| `ppo` | 779.59 | 123.68 | 753.50 / 784.72 / 800.55 |
+| `ppo` | **822.92** | 116.89 | 820.10 / 799.45 / 849.22 |
 | `sac` | -7305.86 | 6426.45 | -11431.58 / -11120.33 / 634.33 |
 
 训练曲线会画出 seed 间均值与标准差带。
 
 **结果分析**：
 
-- DQN 系列在本环境中表现最稳定，`Dueling Double DQN` 平均奖励最高（**804.46**）。
-- PPO 经过改进（GAE、reward scaling、clipped value loss、gradient clipping、KL early stopping、lr/entropy decay、best checkpoint）后，平均奖励从最初崩溃的 471.30 提升至 **779.59**，在 seed 456 上达到 800.55，但在 seed 42 上仅 753.50，尚未稳定超过 Dueling Double DQN。
+- PPO 在引入 state/reward normalization、best-checkpoint selection、并调大学习率与 rollout 批次后，3-seed 平均奖励达到 **822.92**，稳定超过此前最优的 `Dueling Double DQN`（**804.46**）。
+- DQN 系列仍然表现稳健，`Dueling Double DQN` 平均奖励为 **804.46**，是可靠的值函数方法 baseline。
 - SAC 在本任务上极不稳定，仅 seed 456 收敛至正值，其余 seed 因离散动作与奖励尺度不匹配导致策略崩溃。
 
-这说明在小动作空间、短 episode 的离散控制任务上，基于值函数的方法（DQN 系列）具有更高的样本效率和稳定性；PPO 通过算法稳定化技巧可以接近但尚未全面超越 DQN。
+关键改进说明：
+
+- `use_state_norm` 与 `use_reward_norm`：对局部观测和单步奖励做 online running mean/std 归一化，降低不同 seed 下初始分布差异带来的训练震荡。
+- `train_ppo_best`：训练过程中每 `eval_every` 轮用当前策略在独立评估集上测试，保存并恢复最优 checkpoint，避免 PPO 后期策略退化导致的最终性能下降。
+- 超参数调整：`learning_rate=3e-4`、`rollout_episodes=8`、`update_epochs=10`，在更大批量梯度的同时减少每次更新的过拟合风险。
 
 ![Baseline 与算法消融评估结果](figures/baselines/baseline_comparison.png)
 
