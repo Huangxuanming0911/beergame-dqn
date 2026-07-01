@@ -15,13 +15,10 @@ from .experiments import (
     plot_baseline_comparison,
     plot_training,
     train_dqn,
-    train_ppo,
     train_ppo_best,
-    train_sac,
 )
 from .policies import build_policy
 from .ppo import PPOAgent
-from .sac_discrete import DiscreteSACAgent
 
 
 class DQNPolicy:
@@ -40,21 +37,7 @@ class PPOPolicy:
         self.agent.reset_history()
 
     def act(self, state, firm_id: int) -> int:
-        return self.agent.eval_act(state[firm_id], use_ema=self.agent.use_ema)
-
-
-class SACPolicy:
-    def __init__(self, agent: DiscreteSACAgent):
-        self.agent = agent
-
-    def act(self, state, firm_id: int) -> int:
-        with torch.no_grad():
-            state_t = torch.FloatTensor(state[firm_id]).unsqueeze(0).to(self.agent.device)
-            q1 = self.agent.q1(state_t)
-            q2 = self.agent.q2(state_t)
-            q = torch.min(q1, q2)
-            action = q.argmax(dim=-1)
-        return int(action.item())
+        return self.agent.eval_act(state[firm_id])
 
 
 def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed: int) -> DQNAgent:
@@ -77,61 +60,31 @@ def build_agent(env: BeerGameEnv, cfg: dict, algorithm: dict, firm_id: int, seed
 
 def build_ppo_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> PPOAgent:
     ppo_cfg = cfg.get("ppo", {})
-    episodes = int(ppo_cfg.get("episodes", 300))
-    rollout_episodes = int(ppo_cfg.get("rollout_episodes", 4))
+    episodes = int(ppo_cfg.get("episodes", 1000))
+    rollout_episodes = int(ppo_cfg.get("rollout_episodes", 8))
     total_updates = max(1, episodes // rollout_episodes)
-    state_history_len = int(ppo_cfg.get("state_history_len", 1))
-    centralized_critic = bool(ppo_cfg.get("centralized_critic", False))
-    critic_state_dim = 3 * env.num_firms if centralized_critic else 3 * state_history_len
-    state_dim = 3 * state_history_len
     return PPOAgent(
-        state_dim=state_dim,
+        state_dim=3,
         action_dim=env.config.max_order + 1,
         firm_id=firm_id,
-        lr=float(ppo_cfg.get("learning_rate", 1e-4)),
+        lr=float(ppo_cfg.get("learning_rate", 3e-4)),
         gamma=float(ppo_cfg.get("gamma", 0.99)),
         gae_lambda=float(ppo_cfg.get("gae_lambda", 0.95)),
         clip_epsilon=float(ppo_cfg.get("clip_epsilon", 0.2)),
         value_coef=float(ppo_cfg.get("value_coef", 0.5)),
         entropy_coef=float(ppo_cfg.get("entropy_coef", 0.05)),
-        hidden_size=int(ppo_cfg.get("hidden_size", 64)),
+        hidden_size=int(ppo_cfg.get("hidden_size", 256)),
         update_epochs=int(ppo_cfg.get("update_epochs", 10)),
         batch_size=int(ppo_cfg.get("batch_size", 256)),
         max_grad_norm=float(ppo_cfg.get("max_grad_norm", 0.5)),
         target_kl=float(ppo_cfg.get("target_kl", 0.015)),
-        separate_actor_critic=bool(ppo_cfg.get("separate_actor_critic", False)),
         rollout_episodes=rollout_episodes,
         use_reward_norm=bool(ppo_cfg.get("use_reward_norm", True)),
         use_state_norm=bool(ppo_cfg.get("use_state_norm", True)),
         use_value_clip=bool(ppo_cfg.get("use_value_clip", True)),
         use_lr_decay=bool(ppo_cfg.get("use_lr_decay", True)),
         use_entropy_decay=bool(ppo_cfg.get("use_entropy_decay", True)),
-        state_history_len=state_history_len,
-        use_ema=bool(ppo_cfg.get("use_ema", False)),
-        ema_tau=float(ppo_cfg.get("ema_tau", 0.005)),
-        centralized_critic=centralized_critic,
-        critic_state_dim=critic_state_dim,
         total_updates=total_updates,
-        activation=str(ppo_cfg.get("activation", "relu")),
-        use_layer_norm=bool(ppo_cfg.get("use_layer_norm", False)),
-    )
-
-
-def build_sac_agent(env: BeerGameEnv, cfg: dict, firm_id: int, seed: int) -> DiscreteSACAgent:
-    sac_cfg = cfg.get("sac", {})
-    return DiscreteSACAgent(
-        state_dim=3,
-        action_dim=env.config.max_order + 1,
-        firm_id=firm_id,
-        lr=float(sac_cfg.get("learning_rate", 3e-4)),
-        gamma=float(sac_cfg.get("gamma", 0.99)),
-        tau=float(sac_cfg.get("tau", 0.005)),
-        alpha=float(sac_cfg.get("alpha", 0.2)),
-        hidden_size=int(sac_cfg.get("hidden_size", 64)),
-        buffer_size=int(sac_cfg.get("buffer_size", 100000)),
-        batch_size=int(sac_cfg.get("batch_size", 64)),
-        update_every=int(sac_cfg.get("update_every", 1)),
-        reward_scale=float(sac_cfg.get("reward_scale", 1.0)),
     )
 
 
@@ -216,11 +169,6 @@ def main():
                 policy_wrapper = PPOPolicy(agent)
                 train_cfg = {**cfg.get("ppo", {}), "seed": seed}
                 train_fn = train_ppo_best
-            elif algo_type == "sac":
-                agent = build_sac_agent(env, cfg, firm_id, seed)
-                policy_wrapper = SACPolicy(agent)
-                train_cfg = {**cfg.get("sac", {}), "seed": seed}
-                train_fn = train_sac
             else:
                 agent = build_agent(env, cfg, algorithm, firm_id, seed)
                 policy_wrapper = DQNPolicy(agent)

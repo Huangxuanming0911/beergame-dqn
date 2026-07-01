@@ -5,7 +5,7 @@
     "episodes": 20,
     "seed": 42,
     "background_policy": "random",
-    "model_path": "models\\background\\dueling_double_dqn_random_background_seed_42_firm_1_tplus1.pt"
+    "model_path": "models/background/dueling_double_dqn_random_background_seed_42_firm_1_tplus1.pt"
   },
   "base_stock_background": {
     "mean_reward": 824.0,
@@ -13,6 +13,6 @@
     "episodes": 20,
     "seed": 42,
     "background_policy": "base_stock",
-    "model_path": "models\\background\\dueling_double_dqn_base_stock_background_seed_42_firm_1_tplus1.pt"
+    "model_path": "models/background/dueling_double_dqn_base_stock_background_seed_42_firm_1_tplus1.pt"
   }
 }

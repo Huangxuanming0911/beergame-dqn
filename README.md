@@ -66,7 +66,7 @@ DQN 系列算法消融：
 
 PPO 基线：
 
-- `ppo`：离散动作 Actor-Critic PPO，使用 Clipped Surrogate Objective 和 GAE 优势估计。
+- `ppo`：离散动作 Actor-Critic PPO，使用 PPO-Clip 目标、GAE 优势估计、状态/奖励归一化与最优检查点选择。
 
 背景策略实验：
 
@@ -82,10 +82,12 @@ beergame/
   env.py                     # Beergame环境与t+1到货逻辑
   policies.py                # random和base_stock规则策略
   dqn.py                     # DQN、Double DQN、Dueling DQN实现
+  ppo.py                     # 离散动作PPO实现
   experiments.py             # 训练、评估、画图工具函数
   run_baselines.py           # 一键运行baseline与算法消融
   run_background_experiments.py # 其他企业随机/库存补足背景对比
   run_multiagent.py          # 三个企业独立Dueling Double DQN训练
+  plot_policy_behavior.py    # 最终策略订购行为对比画图
 
 configs/
   default.json               # 环境、算法和训练配置
@@ -172,7 +174,7 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 
 ## 当前算法消融结果
 
-当前配置下，每个算法在 3 个 seed（`[42, 123, 456]`）上各训练、评估 20 个 episode，共 60 个评估 episode。DQN 系列训练 300 个 episode，PPO 训练 1000 个 episode，SAC 训练 300 个 episode。结果如下：
+当前配置下，每个算法在 3 个 seed（`[42, 123, 456]`）上各训练、评估 20 个 episode，共 60 个评估 episode。DQN 系列训练 300 个 episode，PPO 训练 1000 个 episode。结果如下：
 
 | 方法 | 平均 reward | 标准差 | seed 均值 |
 | --- | ---: | ---: | --- |
@@ -183,7 +185,6 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 | `dueling_dqn` | 781.23 | 126.05 | 792.53 / 762.03 / 789.15 |
 | `dueling_double_dqn` | 804.46 | 114.58 | 838.55 / 787.10 / 787.72 |
 | `ppo` | **822.92** | 116.89 | 820.10 / 799.45 / 849.22 |
-| `sac` | -7305.86 | 6426.45 | -11431.58 / -11120.33 / 634.33 |
 
 训练曲线会画出 seed 间均值与标准差带。
 
@@ -191,7 +192,6 @@ python -m beergame.run_multiagent --config configs/default.json --skip-train
 
 - PPO 在引入 state/reward normalization、best-checkpoint selection、并调大学习率与 rollout 批次后，3-seed 平均奖励达到 **822.92**，稳定超过此前最优的 `Dueling Double DQN`（**804.46**）。
 - DQN 系列仍然表现稳健，`Dueling Double DQN` 平均奖励为 **804.46**，是可靠的值函数方法 baseline。
-- SAC 在本任务上极不稳定，仅 seed 456 收敛至正值，其余 seed 因离散动作与奖励尺度不匹配导致策略崩溃。
 
 关键改进说明：
 

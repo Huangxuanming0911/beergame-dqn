@@ -57,23 +57,12 @@ class BeerGameEnv:
         self.done = False
         return self._observation()
 
-    def _observation(self, include_aux: bool = False) -> np.ndarray:
-        # 每个企业只观测自己的局部状态。
+    def _observation(self) -> np.ndarray:
         obs = np.stack(
             [self.last_orders, self.satisfied_demand, self.inventory],
             axis=1,
         )
-        if include_aux:
-            aux = np.stack(
-                [self.pipeline, np.maximum(self.demand - self.satisfied_demand, 0.0)],
-                axis=1,
-            )
-            obs = np.concatenate([obs, aux], axis=1)
         return obs.astype(np.float32)
-
-    def get_augmented_observation(self) -> np.ndarray:
-        """Return observation with pipeline and backorder information included."""
-        return self._observation(include_aux=True)
 
     def _clip_actions(self, actions: np.ndarray) -> np.ndarray:
         actions = np.asarray(actions, dtype=np.float32).reshape(self.config.num_firms)

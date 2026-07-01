@@ -22,15 +22,15 @@
     "firm_2_std_reward": 248.91091918945312
   },
   "single_agent_ddqn": {
-    "total_chain_mean_reward": -4663.72509765625,
-    "total_chain_std_reward": 2122.970947265625,
+    "total_chain_mean_reward": -5122.25,
+    "total_chain_std_reward": 2095.78125,
     "episodes": 20,
-    "firm_0_mean_reward": -3057.175048828125,
-    "firm_0_std_reward": 1450.3994140625,
-    "firm_1_mean_reward": 831.9500122070312,
-    "firm_1_std_reward": 104.3564682006836,
-    "firm_2_mean_reward": -2438.5,
-    "firm_2_std_reward": 2145.511962890625
+    "firm_0_mean_reward": -2552.449951171875,
+    "firm_0_std_reward": 1278.73193359375,
+    "firm_1_mean_reward": 838.5499877929688,
+    "firm_1_std_reward": 98.67572021484375,
+    "firm_2_mean_reward": -3408.35009765625,
+    "firm_2_std_reward": 2107.5087890625
   },
   "multiagent_ddqn": {
     "total_chain_mean_reward": 3426.550048828125,
@@ -43,9 +43,9 @@
     "firm_2_mean_reward": 2419.175048828125,
     "firm_2_std_reward": 145.15184020996094,
     "model_paths": [
-      "models\\multiagent\\dueling_double_dqn_firm_0_seed_42_tplus1.pt",
-      "models\\multiagent\\dueling_double_dqn_firm_1_seed_42_tplus1.pt",
-      "models\\multiagent\\dueling_double_dqn_firm_2_seed_42_tplus1.pt"
+      "models/multiagent/dueling_double_dqn_firm_0_seed_42_tplus1.pt",
+      "models/multiagent/dueling_double_dqn_firm_1_seed_42_tplus1.pt",
+      "models/multiagent/dueling_double_dqn_firm_2_seed_42_tplus1.pt"
     ]
   }
 }
