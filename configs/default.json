@@ -83,5 +83,25 @@
     "model_dir": "models/multiagent",
     "output_dir": "results/multiagent",
     "figure_dir": "figures/multiagent"
+  },
+  "product_analysis": {
+    "chain_lengths": [3, 5, 7],
+    "demand_lambdas": [8, 10, 12],
+    "default_num_firms": 3,
+    "default_lambda": 10,
+    "price_profile": {
+      "start": 10,
+      "step": -0.6,
+      "floor": 6
+    },
+    "cost_profile": {
+      "holding_cost": 0.5,
+      "lost_sales_cost": 2.0
+    },
+    "policies": ["random", "base_stock"],
+    "seeds": [42, 123, 456],
+    "eval_episodes": 20,
+    "output_dir": "results/product",
+    "figure_dir": "figures/product"
   }
 }

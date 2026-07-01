@@ -96,13 +96,22 @@ class BeerGameEnv:
         next_pipeline[-1] = actions[-1]
 
         rewards = np.zeros(n, dtype=np.float32)
+        revenue_components = np.zeros(n, dtype=np.float32)
+        purchase_cost_components = np.zeros(n, dtype=np.float32)
+        holding_cost_components = np.zeros(n, dtype=np.float32)
+        lost_sales_components = np.zeros(n, dtype=np.float32)
+        stockout = np.maximum(demand - satisfied, 0.0).astype(np.float32)
         prices = np.asarray(self.config.prices, dtype=np.float32)
         for i in range(n):
             # 利润 = 销售收入 - 采购成本 - 库存持有成本 - 缺货惩罚。
             revenue = prices[i] * satisfied[i]
             purchase_cost = prices[i + 1] * actions[i] if i + 1 < n else 0.0
             holding_cost = self.config.holding_cost * self.inventory[i]
-            lost_sales = self.config.lost_sales_cost * max(demand[i] - satisfied[i], 0.0)
+            lost_sales = self.config.lost_sales_cost * stockout[i]
+            revenue_components[i] = revenue
+            purchase_cost_components[i] = purchase_cost
+            holding_cost_components[i] = holding_cost
+            lost_sales_components[i] = lost_sales
             rewards[i] = revenue - purchase_cost - holding_cost - lost_sales
 
         self.pipeline = next_pipeline
@@ -120,5 +129,23 @@ class BeerGameEnv:
             "inventory": self.inventory.copy(),
             "inbound": inbound.copy(),
             "pipeline": self.pipeline.copy(),
+            "stockout": stockout.copy(),
+            "service_level": np.divide(
+                satisfied,
+                demand,
+                out=np.ones_like(satisfied, dtype=np.float32),
+                where=demand > 0,
+            ).astype(np.float32),
+            "order_variance_inputs": {
+                "orders": actions.copy(),
+                "demand": demand.copy(),
+            },
+            "reward_components": {
+                "revenue": revenue_components.copy(),
+                "purchase_cost": purchase_cost_components.copy(),
+                "holding_cost": holding_cost_components.copy(),
+                "lost_sales_penalty": lost_sales_components.copy(),
+                "final_reward": rewards.copy(),
+            },
         }
         return self._observation(), rewards.reshape(n, 1), self.done, info

@@ -43,9 +43,9 @@
     "firm_2_mean_reward": 2419.175048828125,
     "firm_2_std_reward": 145.15184020996094,
     "model_paths": [
-      "models/multiagent/dueling_double_dqn_firm_0_seed_42_tplus1.pt",
-      "models/multiagent/dueling_double_dqn_firm_1_seed_42_tplus1.pt",
-      "models/multiagent/dueling_double_dqn_firm_2_seed_42_tplus1.pt"
+      "models\\multiagent\\dueling_double_dqn_firm_0_seed_42_tplus1.pt",
+      "models\\multiagent\\dueling_double_dqn_firm_1_seed_42_tplus1.pt",
+      "models\\multiagent\\dueling_double_dqn_firm_2_seed_42_tplus1.pt"
     ]
   }
 }
